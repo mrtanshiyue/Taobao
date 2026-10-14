@@ -29,7 +29,7 @@ jobs:
         with:
           name: taobao-image-helper-windows
           path: |
-          taobao-image-helper/dist/淘宝图片助手.exe
-          taobao-image-helper/dist/第三方模型许可证.txt
+            taobao-image-helper/dist/淘宝图片助手.exe
+            taobao-image-helper/dist/第三方模型许可证.txt
           if-no-files-found: error
           retention-days: 30
