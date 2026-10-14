@@ -6,7 +6,7 @@ if errorlevel 1 goto failed
 if errorlevel 1 goto failed
 .venv\Scripts\python.exe -m pip install -r requirements.txt
 if errorlevel 1 goto failed
-.venv\Scripts\python.exe -m playwright install chromium
+.venv\Scripts\python.exe -m playwright install chromium --no-shell
 if errorlevel 1 goto failed
 echo Setup complete. Run run.bat to start Taobao Image Helper.
 if not defined CI pause
