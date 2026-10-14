@@ -3,6 +3,8 @@ cd /d "%~dp0"
 if not exist .venv\Scripts\python.exe call setup.bat
 if not exist .venv\Scripts\python.exe exit /b 1
 
+.venv\Scripts\python.exe -c "from playwright.sync_api import sync_playwright; p=sync_playwright().start(); p.chromium.launch(channel='msedge', headless=True).close(); p.stop()"
+if errorlevel 1 goto failed
 .venv\Scripts\python.exe -m pip install pyinstaller
 if errorlevel 1 goto failed
 
