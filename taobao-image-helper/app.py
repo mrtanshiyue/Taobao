@@ -478,6 +478,8 @@ class App:
         self.detail_count = StringVar(value="详情图 0")
         self.busy = False
         self.page_open = False
+        self.opened_input = ""
+        self.opening_input = ""
         self.build_ui()
         self.root.after(150, self.poll_events)
         self.root.protocol("WM_DELETE_WINDOW", self.close)
@@ -544,6 +546,7 @@ class App:
         self.url_entry = ttk.Entry(page_card, textvariable=self.url, style="Field.TEntry")
         self.url_entry.pack(fill="x")
         self.url_entry.bind("<Return>", lambda _event: self.open_page())
+        self.url.trace_add("write", lambda *_args: self.url_changed())
         page_actions = ttk.Frame(page_card, style="Card.TFrame")
         page_actions.pack(fill="x", pady=(12, 0))
         self.open_button = ttk.Button(page_actions, text="打开商品页", style="Primary.TButton", command=self.open_page)
@@ -633,10 +636,12 @@ class App:
 
     def refresh_controls(self):
         enabled = not self.busy
+        same_product = self.page_open and self.url.get().strip() == self.opened_input
         self.open_button.configure(state="normal" if enabled else "disabled")
-        self.scan_button.configure(state="normal" if enabled and self.page_open else "disabled")
-        self.diagnose_button.configure(state="normal" if enabled and self.page_open else "disabled")
-        self.download_button.configure(state="normal" if enabled and self.images else "disabled")
+        self.url_entry.configure(state="normal" if enabled else "disabled")
+        self.scan_button.configure(state="normal" if enabled and same_product else "disabled")
+        self.diagnose_button.configure(state="normal" if enabled and same_product else "disabled")
+        self.download_button.configure(state="normal" if enabled and same_product and self.images else "disabled")
         self.folder_button.configure(state="normal" if enabled else "disabled")
         self.folder_entry.configure(state="normal" if enabled else "disabled")
         self.mirror_option.configure(state="normal" if enabled else "disabled")
@@ -646,6 +651,11 @@ class App:
         has_selection = bool(self.tree.selection())
         self.main_button.configure(state="normal" if enabled and has_selection else "disabled")
         self.detail_button.configure(state="normal" if enabled and has_selection else "disabled")
+
+    def url_changed(self):
+        if self.page_open and self.url.get().strip() != self.opened_input and not self.busy:
+            self.set_status("商品链接已修改。请重新打开商品页后再扫描或下载。", "Warning")
+        self.refresh_controls()
 
     def replace_images(self, images: list[ProductImage]):
         self.images = images
@@ -675,6 +685,7 @@ class App:
         except ValueError as exc:
             messagebox.showerror("链接无效", str(exc))
             return
+        self.opening_input = self.url.get().strip()
         self.page_open = False
         self.replace_images([])
         self.busy = True
@@ -739,6 +750,7 @@ class App:
                 kind, value = self.worker.events.get_nowait()
                 if kind == "opened":
                     self.page_open = True
+                    self.opened_input = self.opening_input
                     self.busy = False
                     self.set_status(value, "Ready")
                 elif kind == "scanned":
@@ -771,6 +783,7 @@ class App:
                     messagebox.showerror("操作失败", value)
                 elif kind == "stopped":
                     self.page_open = False
+                    self.opened_input = ""
                     self.busy = False
                     self.set_status("浏览器服务已停止。重新打开商品页即可继续。", "Warning")
         except queue.Empty:
