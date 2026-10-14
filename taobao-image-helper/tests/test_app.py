@@ -11,6 +11,7 @@ from app import (
     create_product_folder,
     face_boxes,
     image_url,
+    normalize_image,
     parse_product_urls,
     process_image,
     product_title,
@@ -100,6 +101,19 @@ class ImageHelpersTests(unittest.TestCase):
         self.assertEqual(faces, 0)
         self.assertEqual(result.getpixel((0, 0)), (0, 0, 255))
         self.assertEqual(result.getpixel((1, 0)), (255, 0, 0))
+
+    def test_webp_is_saved_as_jpeg_with_matching_extension(self):
+        source = Image.new("RGB", (2, 1), (120, 80, 40))
+        data = BytesIO()
+        source.save(data, format="WEBP")
+
+        normalized, extension = normalize_image(data.getvalue())
+        processed, processed_extension, _faces = process_image(data.getvalue(), mirror=False, mosaic=False)
+
+        self.assertEqual(extension, ".jpg")
+        self.assertEqual(processed_extension, ".jpg")
+        self.assertEqual(Image.open(BytesIO(normalized)).format, "JPEG")
+        self.assertEqual(Image.open(BytesIO(processed)).format, "JPEG")
 
 
 class ProductFolderTests(unittest.TestCase):

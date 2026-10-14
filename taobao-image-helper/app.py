@@ -3,7 +3,6 @@ from __future__ import annotations
 import html
 import csv
 import json
-import mimetypes
 import queue
 import re
 import threading
@@ -327,10 +326,27 @@ def face_boxes(rgb: np.ndarray) -> list[tuple[int, int, int, int]]:
     return result
 
 
+def _encode_portable_image(image: Image.Image, preserve_png: bool) -> tuple[bytes, str]:
+    output = BytesIO()
+    if preserve_png or "A" in image.getbands() or "transparency" in image.info:
+        image.save(output, format="PNG")
+        return output.getvalue(), ".png"
+    image.convert("RGB").save(output, format="JPEG", quality=94)
+    return output.getvalue(), ".jpg"
+
+
+def normalize_image(data: bytes) -> tuple[bytes, str]:
+    source = Image.open(BytesIO(data))
+    preserve_png = source.format == "PNG" or "A" in source.getbands() or "transparency" in source.info
+    return _encode_portable_image(ImageOps.exif_transpose(source), preserve_png)
+
+
 def process_image(data: bytes, mirror: bool, mosaic: bool) -> tuple[bytes, str, int]:
-    image = ImageOps.exif_transpose(Image.open(BytesIO(data)))
+    source = Image.open(BytesIO(data))
+    preserve_png = source.format == "PNG" or "A" in source.getbands() or "transparency" in source.info
+    image = ImageOps.exif_transpose(source)
     if image.mode not in ("RGB", "RGBA"):
-        image = image.convert("RGB")
+        image = image.convert("RGBA" if preserve_png else "RGB")
     faces = 0
     if mosaic:
         rgb = np.asarray(image.convert("RGB"))
@@ -342,21 +358,8 @@ def process_image(data: bytes, mirror: bool, mosaic: bool) -> tuple[bytes, str, 
     if mirror:
         image = ImageOps.mirror(image)
 
-    output = BytesIO()
-    fmt = Image.open(BytesIO(data)).format or "JPEG"
-    if fmt.upper() in ("JPG", "JPEG"):
-        image.convert("RGB").save(output, format="JPEG", quality=94)
-        ext = ".jpg"
-    elif fmt.upper() == "PNG":
-        image.save(output, format="PNG")
-        ext = ".png"
-    elif fmt.upper() == "WEBP":
-        image.save(output, format="WEBP", quality=94)
-        ext = ".webp"
-    else:
-        image.convert("RGB").save(output, format="JPEG", quality=94)
-        ext = ".jpg"
-    return output.getvalue(), ext, faces
+    encoded, extension = _encode_portable_image(image, preserve_png)
+    return encoded, extension, faces
 
 
 class BrowserWorker(threading.Thread):
@@ -507,13 +510,11 @@ class BrowserWorker(threading.Thread):
                 data = response.body()
                 if not content_type.startswith("image/"):
                     raise RuntimeError(f"服务器返回的不是图片（Content-Type: {content_type or '未知'}）")
-                ext = mimetypes.guess_extension(content_type) or Path(urllib.parse.urlparse(item.url).path).suffix or ".jpg"
-                if ext == ".jpe":
-                    ext = ".jpg"
+                normalized, ext = normalize_image(data)
                 counts[item.category] += 1
                 name = f"{item.category}_{counts[item.category]:03d}"
                 stage = "保存原图"
-                (originals / f"{name}{ext}").write_bytes(data)
+                (originals / f"{name}{ext}").write_bytes(normalized)
                 if mirror or mosaic:
                     stage = "镜像和人脸处理"
                     transformed, out_ext, faces = process_image(data, mirror, mosaic)
