@@ -3,7 +3,16 @@ from io import BytesIO
 
 from PIL import Image
 
-from app import _face_cascades, canonical_image_url, image_url, process_image, valid_product_url
+from app import (
+    _face_cascades,
+    canonical_image_url,
+    create_product_folder,
+    image_url,
+    parse_product_urls,
+    process_image,
+    product_title,
+    valid_product_url,
+)
 
 
 class ProductUrlTests(unittest.TestCase):
@@ -23,6 +32,14 @@ class ProductUrlTests(unittest.TestCase):
         ):
             with self.subTest(url=url), self.assertRaises(ValueError):
                 valid_product_url(url)
+
+    def test_parses_and_validates_multiple_links(self):
+        self.assertEqual(
+            parse_product_urls("item.taobao.com/item.htm?id=1\nhttps://detail.tmall.com/item.htm?id=2;"),
+            ["https://item.taobao.com/item.htm?id=1", "https://detail.tmall.com/item.htm?id=2"],
+        )
+        with self.assertRaises(ValueError):
+            parse_product_urls("https://item.taobao.com/item.htm?id=1, https://example.com/")
 
 
 class ImageHelpersTests(unittest.TestCase):
@@ -57,6 +74,43 @@ class ImageHelpersTests(unittest.TestCase):
         self.assertEqual(faces, 0)
         self.assertEqual(result.getpixel((0, 0)), (0, 0, 255))
         self.assertEqual(result.getpixel((1, 0)), (255, 0, 0))
+
+
+class ProductFolderTests(unittest.TestCase):
+    class FakeLocator:
+        first = None
+
+        def __init__(self, value):
+            self.value = value
+            self.first = self
+
+        def get_attribute(self, _name, timeout):
+            raise TimeoutError()
+
+        def inner_text(self, timeout):
+            return self.value
+
+    class FakePage:
+        def locator(self, _selector):
+            return ProductFolderTests.FakeLocator("衬衫/新品:轻薄 | 淘宝网")
+
+        def title(self):
+            return "备用标题 - 淘宝网"
+
+    def test_product_title_is_sanitized_for_windows(self):
+        self.assertEqual(product_title(self.FakePage(), "https://item.taobao.com/item.htm?id=123"), "衬衫_新品_轻薄")
+
+    def test_duplicate_title_gets_new_folder_without_overwriting(self):
+        from tempfile import TemporaryDirectory
+        from pathlib import Path
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            first = create_product_folder(root, "商品标题")
+            (first / "keep.txt").write_text("保留", encoding="utf-8")
+            second = create_product_folder(root, "商品标题")
+            self.assertEqual(second.name, "商品标题 (2)")
+            self.assertEqual((first / "keep.txt").read_text(encoding="utf-8"), "保留")
 
 
 if __name__ == "__main__":

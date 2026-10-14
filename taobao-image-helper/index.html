@@ -22,8 +22,8 @@
     }
     * { box-sizing: border-box; }
     body { margin: 0; background: var(--paper); color: var(--ink); }
-    button, input { font: inherit; }
-    button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid #83acd9; outline-offset: 2px; }
+    button, input, textarea { font: inherit; }
+    button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 3px solid #83acd9; outline-offset: 2px; }
     .shell { width: min(1100px, calc(100% - 40px)); margin: 0 auto; padding: 34px 0 52px; }
     header { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-bottom: 34px; }
     .brand { display: flex; align-items: center; gap: 13px; }
@@ -41,9 +41,10 @@
     .section-title { font-size: 15px; font-weight: 720; margin: 0 0 18px; }
     label { display: block; color: #334d5a; font-size: 13px; font-weight: 650; margin-bottom: 8px; }
     input[type="text"], input[type="url"] { width: 100%; min-height: 44px; border: 1px solid #c6d3da; border-radius: 8px; padding: 0 12px; background: #fff; color: var(--ink); }
+    textarea { width: 100%; min-height: 112px; resize: vertical; border: 1px solid #c6d3da; border-radius: 8px; padding: 11px 12px; background: #fff; color: var(--ink); line-height: 1.5; }
     input::placeholder { color: #8b9ba3; }
-    .url-row { display: flex; gap: 9px; }
-    .url-row input { min-width: 0; flex: 1; }
+    .url-row { display: flex; align-items: flex-start; gap: 9px; }
+    .url-row textarea { min-width: 0; flex: 1; }
     .button { min-height: 43px; border: 0; border-radius: 8px; padding: 0 15px; color: white; background: var(--blue); font-weight: 700; cursor: pointer; transition: background .15s ease, transform .15s ease; white-space: nowrap; }
     .button:hover:not(:disabled) { background: var(--blue-dark); }
     .button:active:not(:disabled) { transform: translateY(1px); }
@@ -116,13 +117,14 @@
     <section class="workspace" aria-label="商品图片处理">
       <div class="panel">
         <h2 class="section-title">商品页面</h2>
-        <label for="product-url">淘宝或天猫商品链接</label>
+        <label for="product-url">淘宝或天猫商品链接（批量时每行一个）</label>
         <div class="url-row">
-          <input id="product-url" type="url" placeholder="粘贴商品链接" autocomplete="url">
+          <textarea id="product-url" placeholder="粘贴一个或多个商品链接，每行一个"></textarea>
           <button id="open-button" class="button" type="button">打开商品页</button>
         </div>
         <div class="actions">
           <button id="scan-button" class="button secondary" type="button" disabled>扫描图片</button>
+          <button id="batch-button" class="button secondary" type="button">批量下载并处理</button>
         </div>
         <p class="hint">如页面要求登录，请在弹出的浏览器窗口完成登录，再回来扫描。</p>
       </div>
@@ -138,7 +140,7 @@
           <label class="check"><input id="mosaic" type="checkbox" checked> 识别人脸并打马赛克</label>
         </div>
         <button id="download-button" class="button download" type="button" disabled>下载并处理图片</button>
-        <p class="hint">每次下载会创建独立文件夹，原图和处理结果分别放在“下载原图”和“处理后”。</p>
+        <p class="hint">每个商品按商品标题建文件夹；原图和处理结果分别放在“下载原图”和“处理后”。</p>
       </div>
     </section>
 
@@ -160,6 +162,14 @@
     const statusEl = $("status");
     let lastSignature = "";
     let outputInitialized = false;
+
+    function productLinks() {
+      return $("product-url").value.split(/[\r\n,，;；]+/).map((value) => value.trim()).filter(Boolean);
+    }
+
+    function normalizedUrl(value) {
+      return value.includes("://") ? value : "https://" + value;
+    }
 
     async function post(path, data) {
       const response = await fetch(path, {
@@ -227,9 +237,12 @@
           outputInitialized = true;
         }
         renderImages(state.images, state.busy);
+        const links = productLinks();
+        const currentProduct = links.length === 1 && normalizedUrl(links[0]) === state.current_url;
         $("open-button").disabled = state.busy;
-        $("scan-button").disabled = state.busy || !state.page_open;
-        $("download-button").disabled = state.busy || !state.images.length;
+        $("scan-button").disabled = state.busy || !state.page_open || !currentProduct;
+        $("download-button").disabled = state.busy || !state.images.length || !currentProduct;
+        $("batch-button").disabled = state.busy;
       } catch (_error) {
         statusEl.textContent = "本机服务已停止。重新运行 run_web.bat 即可连接。";
         statusEl.dataset.kind = "error";
@@ -237,10 +250,25 @@
     }
 
     $("open-button").addEventListener("click", async () => {
-      try { await post("/api/open", { url: $("product-url").value }); }
+      try {
+        const first = productLinks()[0] || "";
+        await post("/api/open", { url: first });
+      }
       catch (error) { statusEl.textContent = error.message; statusEl.dataset.kind = "error"; }
       refresh();
     });
+    $("batch-button").addEventListener("click", async () => {
+      try {
+        await post("/api/batch", {
+          urls: $("product-url").value,
+          output_dir: $("output-dir").value,
+          mirror: $("mirror").checked,
+          mosaic: $("mosaic").checked
+        });
+      } catch (error) { statusEl.textContent = error.message; statusEl.dataset.kind = "error"; }
+      refresh();
+    });
+    $("product-url").addEventListener("input", refresh);
     $("scan-button").addEventListener("click", async () => {
       try { await post("/api/scan", {}); }
       catch (error) { statusEl.textContent = error.message; statusEl.dataset.kind = "error"; }

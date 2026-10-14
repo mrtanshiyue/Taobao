@@ -7,7 +7,7 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from app import BrowserWorker, valid_product_url
+from app import BrowserWorker, parse_product_urls, valid_product_url
 
 
 PAGE = Path(__file__).with_name("index.html")
@@ -21,6 +21,7 @@ class LocalApp:
         self.images = []
         self.busy = False
         self.page_open = False
+        self.current_url = ""
         self.status = "粘贴商品链接，打开商品页后扫描图片。"
         self.status_kind = "idle"
         self.output_dir = str(Path.home() / "Pictures" / "淘宝图片")
@@ -62,12 +63,24 @@ class LocalApp:
                         "folder": folder,
                         "failure_log": failure_log,
                     }
+                elif kind == "batch_complete":
+                    self.busy = False
+                    self.page_open = False
+                    self.current_url = ""
+                    self.status = (
+                        f"批量完成：{len(value['products'])} 个商品，成功下载 {value['ok']} 张，"
+                        f"图片失败 {value['failed']} 张，商品异常 {value['product_errors']} 个，"
+                        f"识别人脸 {value['faces']} 张。"
+                    )
+                    self.status_kind = "error" if value["failed"] or value["product_errors"] else "done"
+                    self.result = value
                 elif kind == "error":
                     self.busy = False
                     self.status = value
                     self.status_kind = "error"
                 elif kind == "stopped":
                     self.page_open = False
+                    self.current_url = ""
                     self.busy = False
 
     def snapshot(self):
@@ -78,6 +91,7 @@ class LocalApp:
                 "status_kind": self.status_kind,
                 "busy": self.busy,
                 "page_open": self.page_open,
+                "current_url": self.current_url,
                 "images": [{"url": item.url, "category": item.category} for item in self.images],
                 "output_dir": self.output_dir,
                 "result": self.result,
@@ -90,14 +104,20 @@ class LocalApp:
             if command == "open":
                 self.images = []
                 self.page_open = False
+                self.current_url = args[0]
             elif command == "scan":
                 self.images = []
+            elif command == "batch":
+                self.images = []
+                self.page_open = False
+                self.current_url = ""
             self.busy = True
             self.status_kind = "working"
             self.status = {
                 "open": "正在打开商品页…",
                 "scan": "正在扫描页面图片…",
                 "download": "正在下载和处理图片…",
+                "batch": f"正在批量处理 {len(args[0])} 个商品…",
             }.get(command, "正在处理…")
             self.result = None
             self.worker.commands.put((command, *args))
@@ -197,6 +217,19 @@ def serve():
                         images = list(app.images)
                     app.command("download", images, output_dir, mirror, mosaic)
                     message = "开始下载和处理图片。"
+                elif self.path == "/api/batch":
+                    urls = parse_product_urls(str(data.get("urls", "")))
+                    output_dir = Path(str(data.get("output_dir", ""))).expanduser()
+                    if not str(data.get("output_dir", "")).strip() or not output_dir.is_absolute():
+                        raise ValueError("请输入完整的保存路径。")
+                    mirror = data.get("mirror", True)
+                    mosaic = data.get("mosaic", True)
+                    if not isinstance(mirror, bool) or not isinstance(mosaic, bool):
+                        raise ValueError("处理选项无效。")
+                    with app.lock:
+                        app.output_dir = str(output_dir)
+                    app.command("batch", urls, output_dir, mirror, mosaic)
+                    message = f"开始批量处理 {len(urls)} 个商品。"
                 else:
                     self.send_json({"error": "操作不存在。"}, 404)
                     return

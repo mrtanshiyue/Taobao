@@ -6,7 +6,6 @@ import json
 import mimetypes
 import queue
 import re
-import tempfile
 import threading
 import urllib.parse
 from dataclasses import dataclass
@@ -14,7 +13,7 @@ from datetime import datetime
 from functools import lru_cache
 from io import BytesIO
 from pathlib import Path
-from tkinter import BooleanVar, StringVar, Tk, filedialog, font as tkfont, messagebox, ttk
+from tkinter import BooleanVar, StringVar, Text, Tk, Toplevel, filedialog, font as tkfont, messagebox, ttk
 
 try:
     from playwright.sync_api import sync_playwright
@@ -65,6 +64,50 @@ def valid_product_url(value: str) -> str:
     ):
         raise ValueError("请输入 HTTPS 的淘宝、天猫或淘宝短链接。")
     return value
+
+
+def parse_product_urls(value: str) -> list[str]:
+    urls = [part.strip() for part in re.split(r"[\r\n,，;；]+", value or "") if part.strip()]
+    if not urls:
+        raise ValueError("请至少粘贴一个淘宝商品链接，每行一个。")
+    return [valid_product_url(url) for url in urls]
+
+
+def product_title(page, url: str) -> str:
+    title = ""
+    for selector, attribute in (("meta[property='og:title']", "content"), ("h1", None)):
+        try:
+            locator = page.locator(selector).first
+            title = locator.get_attribute(attribute, timeout=1200) if attribute else locator.inner_text(timeout=1200)
+        except Exception:
+            continue
+        if title and title.strip():
+            break
+    if not title:
+        try:
+            title = page.title()
+        except Exception:
+            title = ""
+    title = re.sub(r"\s*[-_|]\s*(淘宝网|天猫|淘宝|tmall\.com).*$", "", title or "", flags=re.IGNORECASE).strip()
+    title = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", title).strip(" .")[:80].rstrip(" .")
+    reserved = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
+    if not title or title.split(".", 1)[0].upper() in reserved:
+        item_id = urllib.parse.parse_qs(urllib.parse.urlparse(url).query).get("id", [""])[0]
+        title = f"商品-{item_id}" if item_id.isdigit() else "淘宝商品"
+    return title
+
+
+def create_product_folder(output_dir: Path, title: str) -> Path:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    candidate = output_dir / title
+    suffix = 2
+    while True:
+        try:
+            candidate.mkdir()
+            return candidate
+        except FileExistsError:
+            candidate = output_dir / f"{title} ({suffix})"
+            suffix += 1
 
 
 def image_url(value: str) -> str | None:
@@ -364,10 +407,67 @@ class BrowserWorker(threading.Thread):
                             path = export_page_structure(page)
                             self.emit("diagnosed", str(path))
                         elif kind == "download":
-                            if not context:
+                            if not context or not page:
                                 raise RuntimeError("请先打开商品链接。")
                             require_taobao_login(context)
-                            self.download(context, page.url, *command[1:])
+                            images, output_dir, mirror, mosaic = command[1:]
+                            folder = create_product_folder(output_dir, product_title(page, page.url))
+                            self.download(context, page.url, images, folder, mirror, mosaic)
+                        elif kind == "batch":
+                            urls, output_dir, mirror, mosaic = command[1:]
+                            if not context:
+                                APP_DIR.mkdir(parents=True, exist_ok=True)
+                                context = playwright.chromium.launch_persistent_context(
+                                    str(APP_DIR / "browser"), channel="msedge", headless=False, viewport=None
+                                )
+                                page = context.pages[0] if context.pages else context.new_page()
+                            page.goto(urls[0], wait_until="domcontentloaded", timeout=60000)
+                            require_taobao_login(context)
+                            if urllib.parse.urlparse(page.url).hostname == "login.taobao.com":
+                                raise RuntimeError("当前停留在淘宝登录页，请在 Edge 完成登录后重新开始批量处理。")
+                            products = []
+                            totals = {"ok": 0, "failed": 0, "product_errors": 0, "faces": 0}
+                            for index, url in enumerate(urls, 1):
+                                folder = None
+                                stage = "打开商品页"
+                                try:
+                                    if index > 1:
+                                        page.goto(url, wait_until="domcontentloaded", timeout=60000)
+                                    page.wait_for_timeout(1000)
+                                    require_taobao_login(context)
+                                    if urllib.parse.urlparse(page.url).hostname == "login.taobao.com":
+                                        raise RuntimeError("当前停留在淘宝登录页，请在 Edge 完成登录后重新开始批量处理。")
+                                    title = product_title(page, url)
+                                    folder = create_product_folder(output_dir, title)
+                                    stage = "扫描主图和详情图"
+                                    images, warning = scan_product_page(page)
+                                    if not images:
+                                        raise RuntimeError(warning or "未找到主图或详情图")
+                                    stage = "下载图片"
+                                    ok, failed, faces, folder_path, failure_log = self.download(
+                                        context, page.url, images, folder, mirror, mosaic,
+                                        report=False, progress_label=f"商品 {index}/{len(urls)}：",
+                                    )
+                                    totals["ok"] += ok
+                                    totals["failed"] += failed
+                                    totals["faces"] += faces
+                                    products.append({"title": title, "folder": folder_path, "ok": ok, "failed": failed})
+                                except Exception as exc:
+                                    totals["product_errors"] += 1
+                                    if folder is None:
+                                        item_id = urllib.parse.parse_qs(urllib.parse.urlparse(url).query).get("id", [""])[0]
+                                        folder = create_product_folder(output_dir, f"商品-{item_id}" if item_id.isdigit() else "淘宝商品")
+                                    log_path = folder / "下载失败记录.txt"
+                                    try:
+                                        log_path.write_text(
+                                            f"商品链接：{url}\n失败阶段：{stage}\n失败原因：{type(exc).__name__}: {exc}\n",
+                                            encoding="utf-8-sig",
+                                        )
+                                    except OSError:
+                                        pass
+                                    products.append({"title": folder.name, "folder": str(folder), "ok": 0, "failed": 1, "error": str(exc)})
+                                    self.emit("progress", f"商品 {index}/{len(urls)} 失败：{exc}")
+                            self.emit("batch_complete", {**totals, "products": products})
                     except Exception as exc:
                         self.emit("error", str(exc))
         except Exception as exc:
@@ -380,11 +480,10 @@ class BrowserWorker(threading.Thread):
                     pass
             self.emit("stopped")
 
-    def download(self, context, referer: str, images, output_dir: Path, mirror: bool, mosaic: bool):
+    def download(self, context, referer: str, images, output_dir: Path, mirror: bool, mosaic: bool, report=True, progress_label=""):
         output_dir.mkdir(parents=True, exist_ok=True)
-        run_dir = Path(tempfile.mkdtemp(prefix=f"{datetime.now():%Y%m%d_%H%M%S}_", dir=output_dir))
-        originals = run_dir / "下载原图"
-        processed = run_dir / "处理后"
+        originals = output_dir / "下载原图"
+        processed = output_dir / "处理后"
         originals.mkdir(parents=True, exist_ok=True)
         if mirror or mosaic:
             processed.mkdir(parents=True, exist_ok=True)
@@ -427,12 +526,12 @@ class BrowserWorker(threading.Thread):
                     index, item.category, stage, http_status, content_type,
                     type(exc).__name__, str(exc), item.url,
                 ])
-                self.emit("progress", f"{index}/{len(images)}：{stage}失败（{exc}）")
+                self.emit("progress", f"{progress_label}{index}/{len(images)}：{stage}失败（{exc}）")
                 continue
-            self.emit("progress", f"已处理 {index}/{len(images)} 张，识别到 {face_total} 张脸")
+            self.emit("progress", f"{progress_label}已处理 {index}/{len(images)} 张，识别到 {face_total} 张脸")
         failure_log = ""
         if failure_details:
-            failure_path = run_dir / "下载失败记录.txt"
+            failure_path = output_dir / "下载失败记录.txt"
             try:
                 with failure_path.open("w", encoding="utf-8-sig", newline="") as log_file:
                     writer = csv.writer(log_file, delimiter="\t", lineterminator="\n")
@@ -441,7 +540,10 @@ class BrowserWorker(threading.Thread):
                 failure_log = str(failure_path)
             except OSError as exc:
                 self.emit("progress", f"无法保存失败详情：{exc}")
-        self.emit("complete", (ok, failed, face_total, str(run_dir), failure_log))
+        result = (ok, failed, face_total, str(output_dir), failure_log)
+        if report:
+            self.emit("complete", result)
+        return result
 
 
 class App:
@@ -542,7 +644,7 @@ class App:
         page_card = ttk.Frame(top, style="Card.TFrame", padding=17)
         page_card.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
         ttk.Label(page_card, text="商品页面", style="Section.TLabel").pack(anchor="w")
-        ttk.Label(page_card, text="打开商品页后，在 Edge 中完成淘宝登录。", style="Hint.TLabel").pack(anchor="w", pady=(4, 13))
+        ttk.Label(page_card, text="单个商品可直接打开；批量处理时每行粘贴一个链接。", style="Hint.TLabel").pack(anchor="w", pady=(4, 13))
         self.url_entry = ttk.Entry(page_card, textvariable=self.url, style="Field.TEntry")
         self.url_entry.pack(fill="x")
         self.url_entry.bind("<Return>", lambda _event: self.open_page())
@@ -553,13 +655,15 @@ class App:
         self.open_button.pack(side="left")
         self.scan_button = ttk.Button(page_actions, text="扫描图片", style="Secondary.TButton", command=self.scan)
         self.scan_button.pack(side="left", padx=(8, 0))
+        self.batch_button = ttk.Button(page_actions, text="批量下载…", style="Secondary.TButton", command=self.batch_dialog)
+        self.batch_button.pack(side="left", padx=(8, 0))
         self.diagnose_button = ttk.Button(page_actions, text="页面诊断", style="Quiet.TButton", command=self.diagnose)
         self.diagnose_button.pack(side="right")
 
         settings_card = ttk.Frame(top, style="Card.TFrame", padding=17)
         settings_card.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
         ttk.Label(settings_card, text="保存与处理", style="Section.TLabel").pack(anchor="w")
-        ttk.Label(settings_card, text="每次任务新建文件夹；原图和勾选的处理结果分开保存。", style="Hint.TLabel").pack(anchor="w", pady=(4, 10))
+        ttk.Label(settings_card, text="每个商品按标题建文件夹；原图和处理结果分开保存。", style="Hint.TLabel").pack(anchor="w", pady=(4, 10))
         folder_row = ttk.Frame(settings_card, style="Card.TFrame")
         folder_row.pack(fill="x")
         self.folder_entry = ttk.Entry(folder_row, textvariable=self.output_dir, style="Field.TEntry")
@@ -639,6 +743,7 @@ class App:
         same_product = self.page_open and self.url.get().strip() == self.opened_input
         self.open_button.configure(state="normal" if enabled else "disabled")
         self.url_entry.configure(state="normal" if enabled else "disabled")
+        self.batch_button.configure(state="normal" if enabled else "disabled")
         self.scan_button.configure(state="normal" if enabled and same_product else "disabled")
         self.diagnose_button.configure(state="normal" if enabled and same_product else "disabled")
         self.download_button.configure(state="normal" if enabled and same_product and self.images else "disabled")
@@ -737,6 +842,53 @@ class App:
         self.refresh_controls()
         self.worker.commands.put(("download", list(self.images), output_path, self.mirror.get(), self.mosaic.get()))
 
+    def batch_dialog(self):
+        if self.busy:
+            return
+        window = Toplevel(self.root)
+        window.title("批量处理商品")
+        window.transient(self.root)
+        window.grab_set()
+        window.geometry("640x440")
+        window.minsize(480, 340)
+        frame = ttk.Frame(window, padding=18)
+        frame.pack(fill="both", expand=True)
+        ttk.Label(frame, text="粘贴淘宝或天猫商品链接", font=("TkDefaultFont", 12, "bold")).pack(anchor="w")
+        ttk.Label(frame, text="每行一个链接，也可用逗号或分号分隔。程序会依次扫描主图和详情图，并按商品标题建文件夹。", wraplength=590).pack(anchor="w", pady=(5, 12))
+        input_area = ttk.Frame(frame)
+        input_area.pack(fill="both", expand=True)
+        editor = Text(input_area, height=13, wrap="word", undo=True)
+        editor.pack(side="left", fill="both", expand=True)
+        editor_scroll = ttk.Scrollbar(input_area, orient="vertical", command=editor.yview)
+        editor_scroll.pack(side="right", fill="y")
+        editor.configure(yscrollcommand=editor_scroll.set)
+        editor.insert("1.0", getattr(self, "last_batch_text", ""))
+        buttons = ttk.Frame(frame)
+        buttons.pack(fill="x", pady=(13, 0))
+        ttk.Button(buttons, text="取消", command=window.destroy).pack(side="right")
+
+        def start_batch():
+            try:
+                urls = parse_product_urls(editor.get("1.0", "end-1c"))
+                raw_output = self.output_dir.get().strip()
+                output_path = Path(raw_output).expanduser()
+                if not raw_output or not output_path.is_absolute():
+                    raise ValueError("请选择一个完整的保存文件夹路径。")
+            except ValueError as exc:
+                messagebox.showerror("无法开始批量处理", str(exc), parent=window)
+                return
+            self.last_batch_text = editor.get("1.0", "end-1c")
+            window.destroy()
+            self.page_open = False
+            self.opened_input = ""
+            self.replace_images([])
+            self.busy = True
+            self.set_status(f"正在批量处理 {len(urls)} 个商品…", "Working")
+            self.refresh_controls()
+            self.worker.commands.put(("batch", urls, output_path, self.mirror.get(), self.mosaic.get()))
+
+        ttk.Button(buttons, text="开始批量处理", style="Primary.TButton", command=start_batch).pack(side="right", padx=(0, 8))
+
     def choose_folder(self):
         if self.busy:
             return
@@ -770,6 +922,23 @@ class App:
                     details = f"\n失败详情：\n{failure_log}" if failure_log else ""
                     message = f"已保存到：\n{folder}\n\n成功 {ok} 张，失败 {failed} 张，识别人脸 {faces} 张。{details}"
                     (messagebox.showwarning if failed else messagebox.showinfo)("下载完成", message)
+                elif kind == "batch_complete":
+                    self.busy = False
+                    self.page_open = False
+                    self.opened_input = ""
+                    products = value["products"]
+                    failed = value["failed"]
+                    self.set_status(
+                        f"批量完成：{len(products)} 个商品，成功下载 {value['ok']} 张，图片失败 {failed} 张，商品异常 {value['product_errors']} 个，识别人脸 {value['faces']} 张。",
+                        "Warning" if failed or value["product_errors"] else "Done",
+                    )
+                    folders = "\n".join(item["folder"] for item in products)
+                    message = (
+                        f"商品数：{len(products)}\n成功图片：{value['ok']}\n图片失败：{failed}\n"
+                        f"商品异常：{value['product_errors']}\n"
+                        f"识别人脸：{value['faces']}\n\n商品文件夹：\n{folders}"
+                    )
+                    (messagebox.showwarning if failed else messagebox.showinfo)("批量处理完成", message)
                 elif kind == "diagnosed":
                     self.busy = False
                     self.set_status("页面诊断文件已导出。", "Done")
