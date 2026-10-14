@@ -462,8 +462,10 @@ class App:
     def __init__(self, root: Tk):
         self.root = root
         self.root.title("淘宝图片助手")
-        self.root.geometry("1060x760")
-        self.root.minsize(880, 640)
+        width = min(1060, max(760, root.winfo_screenwidth() - 80))
+        height = min(720, max(580, root.winfo_screenheight() - 100))
+        self.root.geometry(f"{width}x{height}")
+        self.root.minsize(min(760, width), min(580, height))
         self.worker = BrowserWorker()
         self.worker.start()
         self.images: list[ProductImage] = []
@@ -554,7 +556,7 @@ class App:
         settings_card = ttk.Frame(top, style="Card.TFrame", padding=17)
         settings_card.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
         ttk.Label(settings_card, text="保存与处理", style="Section.TLabel").pack(anchor="w")
-        ttk.Label(settings_card, text="每次任务会新建文件夹，原图与处理结果分开保存。", style="Hint.TLabel").pack(anchor="w", pady=(4, 10))
+        ttk.Label(settings_card, text="每次任务新建文件夹；原图和勾选的处理结果分开保存。", style="Hint.TLabel").pack(anchor="w", pady=(4, 10))
         folder_row = ttk.Frame(settings_card, style="Card.TFrame")
         folder_row.pack(fill="x")
         self.folder_entry = ttk.Entry(folder_row, textvariable=self.output_dir, style="Field.TEntry")
@@ -563,12 +565,13 @@ class App:
         self.folder_button.pack(side="left", padx=(7, 0))
         options = ttk.Frame(settings_card, style="Card.TFrame")
         options.pack(fill="x", pady=(8, 5))
-        self.mirror_option = ttk.Checkbutton(options, text="左右镜像", variable=self.mirror, style="Option.TCheckbutton")
+        self.mirror_option = ttk.Checkbutton(options, text="左右镜像", variable=self.mirror, style="Option.TCheckbutton", command=self.update_download_label)
         self.mirror_option.pack(side="left", padx=(0, 16))
-        self.mosaic_option = ttk.Checkbutton(options, text="人脸打马赛克", variable=self.mosaic, style="Option.TCheckbutton")
+        self.mosaic_option = ttk.Checkbutton(options, text="人脸打马赛克", variable=self.mosaic, style="Option.TCheckbutton", command=self.update_download_label)
         self.mosaic_option.pack(side="left")
         self.download_button = ttk.Button(settings_card, text="下载并处理图片", style="Primary.TButton", command=self.download)
         self.download_button.pack(fill="x", pady=(3, 0))
+        self.update_download_label()
 
         results = ttk.Frame(content, style="Card.TFrame", padding=(16, 14, 16, 12))
         results.grid(row=1, column=0, sticky="nsew")
@@ -623,6 +626,10 @@ class App:
         self.status_panel.configure(style=f"Status{kind}.TFrame")
         self.status_dot.configure(style=f"Status{kind}Dot.TLabel")
         self.status_label.configure(style=f"Status{kind}.TLabel")
+
+    def update_download_label(self):
+        label = "下载并处理图片" if self.mirror.get() or self.mosaic.get() else "仅下载原图"
+        self.download_button.configure(text=label)
 
     def refresh_controls(self):
         enabled = not self.busy
