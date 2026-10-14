@@ -22,15 +22,14 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
+      - name: Verify Microsoft Edge support
+        run: python -c "from playwright.sync_api import sync_playwright; p=sync_playwright().start(); p.chromium.launch(channel='msedge', headless=True).close(); p.stop()"
       - name: Build application
         shell: cmd
         run: call taobao-image-helper\build_exe.bat
-      - name: Package application folder
-        shell: pwsh
-        run: Compress-Archive -Path 'taobao-image-helper\dist\淘宝图片助手' -DestinationPath 'taobao-image-helper\dist\淘宝图片助手-Windows.zip' -Force
       - uses: actions/upload-artifact@v7
         with:
           name: taobao-image-helper-windows
-          path: taobao-image-helper/dist/淘宝图片助手-Windows.zip
+          path: taobao-image-helper/dist/淘宝图片助手.exe
           if-no-files-found: error
           retention-days: 30

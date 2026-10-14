@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import html
 import mimetypes
-import os
 import queue
-import sys
 import threading
 import urllib.parse
 from dataclasses import dataclass
@@ -12,11 +10,6 @@ from io import BytesIO
 from pathlib import Path
 from tkinter import BooleanVar, END, Listbox, StringVar, Tk, filedialog, messagebox
 from tkinter import ttk
-
-if getattr(sys, "frozen", False):
-    bundled_browsers = Path(sys.executable).resolve().parent / "ms-playwright"
-    if bundled_browsers.is_dir():
-        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(bundled_browsers)
 
 try:
     from playwright.sync_api import sync_playwright
@@ -188,7 +181,7 @@ class BrowserWorker(threading.Thread):
                                 context.close()
                             APP_DIR.mkdir(parents=True, exist_ok=True)
                             context = playwright.chromium.launch_persistent_context(
-                                str(APP_DIR / "browser"), headless=False, viewport=None
+                                str(APP_DIR / "browser"), channel="msedge", headless=False, viewport=None
                             )
                             page = context.pages[0] if context.pages else context.new_page()
                             page.goto(command[1], wait_until="domcontentloaded", timeout=60000)
