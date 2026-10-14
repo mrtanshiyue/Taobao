@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import csv
 import mimetypes
 import queue
 import tempfile
@@ -68,6 +69,17 @@ def image_url(value: str) -> str | None:
     if any(word in value.lower() for word in ("icon", "logo", "qrcode")):
         return None
     return value
+
+
+def taobao_login_present(context) -> bool:
+    cookies = context.cookies(["https://www.taobao.com", "https://item.taobao.com"])
+    names = {cookie["name"] for cookie in cookies if cookie.get("value")}
+    return bool(names.intersection({"unb", "cookie17"}))
+
+
+def require_taobao_login(context):
+    if not taobao_login_present(context):
+        raise RuntimeError("未检测到淘宝登录信息。请先在弹出的 Edge 商品页登录，再重新点击扫描或下载。")
 
 
 def scan_product_page(page) -> tuple[list[ProductImage], str]:
@@ -226,15 +238,22 @@ class BrowserWorker(threading.Thread):
                             )
                             page = context.pages[0] if context.pages else context.new_page()
                             page.goto(command[1], wait_until="domcontentloaded", timeout=60000)
-                            self.emit("opened", "浏览器已打开。请完成登录并确认商品页，再点“扫描图片”。")
+                            login_hint = (
+                                "已检测到淘宝登录信息，可以扫描图片。"
+                                if taobao_login_present(context)
+                                else "未检测到淘宝登录信息，请在弹出的 Edge 页面登录后再扫描。"
+                            )
+                            self.emit("opened", f"浏览器已打开。{login_hint}")
                         elif kind == "scan":
                             if not page:
                                 raise RuntimeError("请先打开商品链接。")
+                            require_taobao_login(context)
                             images, warning = scan_product_page(page)
                             self.emit("scanned", (images, warning))
                         elif kind == "download":
                             if not context:
                                 raise RuntimeError("请先打开商品链接。")
+                            require_taobao_login(context)
                             self.download(context, page.url, *command[1:])
                     except Exception as exc:
                         self.emit("error", str(exc))
@@ -260,43 +279,52 @@ class BrowserWorker(threading.Thread):
         failure_details = []
         counts = {"主图": 0, "详情图": 0}
         for index, item in enumerate(images, 1):
+            stage = "请求图片"
+            http_status = ""
+            content_type = ""
             try:
                 response = context.request.get(
                     item.url, timeout=30000, headers={"Referer": referer}
                 )
+                http_status = response.status
+                content_type = response.headers.get("content-type", "").split(";")[0]
                 if not response.ok:
                     raise RuntimeError(f"HTTP {response.status}")
+                stage = "读取图片内容"
                 data = response.body()
-                content_type = response.headers.get("content-type", "").split(";")[0]
                 if not content_type.startswith("image/"):
-                    raise RuntimeError("服务器返回的不是图片")
+                    raise RuntimeError(f"服务器返回的不是图片（Content-Type: {content_type or '未知'}）")
                 ext = mimetypes.guess_extension(content_type) or Path(urllib.parse.urlparse(item.url).path).suffix or ".jpg"
                 if ext == ".jpe":
                     ext = ".jpg"
                 counts[item.category] += 1
                 name = f"{item.category}_{counts[item.category]:03d}"
+                stage = "保存原图"
                 (originals / f"{name}{ext}").write_bytes(data)
                 if mirror or mosaic:
+                    stage = "镜像和人脸处理"
                     transformed, out_ext, faces = process_image(data, mirror, mosaic)
+                    stage = "保存处理后图片"
                     (processed / f"{name}{out_ext}").write_bytes(transformed)
                     face_total += faces
                 ok += 1
             except Exception as exc:
                 failed += 1
-                failure_details.append(
-                    f"{index}\t{item.category}\t{item.url}\t{type(exc).__name__}: {exc}"
-                )
-                self.emit("progress", f"{index}/{len(images)}：跳过一张（{exc}）")
+                failure_details.append([
+                    index, item.category, stage, http_status, content_type,
+                    type(exc).__name__, str(exc), item.url,
+                ])
+                self.emit("progress", f"{index}/{len(images)}：{stage}失败（{exc}）")
                 continue
             self.emit("progress", f"已处理 {index}/{len(images)} 张，识别到 {face_total} 张脸")
         failure_log = ""
         if failure_details:
             failure_path = run_dir / "下载失败记录.txt"
             try:
-                failure_path.write_text(
-                    "序号\t类型\t图片地址\t失败原因\n" + "\n".join(failure_details),
-                    encoding="utf-8",
-                )
+                with failure_path.open("w", encoding="utf-8-sig", newline="") as log_file:
+                    writer = csv.writer(log_file, delimiter="\t", lineterminator="\n")
+                    writer.writerow(["序号", "类型", "失败阶段", "HTTP状态", "Content-Type", "错误类型", "失败原因", "图片地址"])
+                    writer.writerows(failure_details)
                 failure_log = str(failure_path)
             except OSError as exc:
                 self.emit("progress", f"无法保存失败详情：{exc}")
