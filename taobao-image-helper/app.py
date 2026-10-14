@@ -11,10 +11,10 @@ import threading
 import urllib.parse
 from dataclasses import dataclass
 from datetime import datetime
+from functools import lru_cache
 from io import BytesIO
 from pathlib import Path
-from tkinter import BooleanVar, END, Listbox, StringVar, Tk, filedialog, messagebox
-from tkinter import ttk
+from tkinter import BooleanVar, StringVar, Tk, filedialog, font as tkfont, messagebox, ttk
 
 try:
     from playwright.sync_api import sync_playwright
@@ -245,13 +245,18 @@ def scan_product_page(page) -> tuple[list[ProductImage], str]:
     return [image for image, _score in found.values()], "；".join(warnings)
 
 
+@lru_cache(maxsize=1)
+def _face_cascades():
+    return (
+        cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml"),
+        cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_profileface.xml"),
+    )
+
+
 def face_boxes(rgb: np.ndarray) -> list[tuple[int, int, int, int]]:
     # shortcut: Haar cascades can still miss occluded faces; use a trained detector for higher recall.
     gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
-    cascades = [
-        cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml"),
-        cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_profileface.xml"),
-    ]
+    cascades = _face_cascades()
     boxes: list[tuple[int, int, int, int]] = []
     for cascade_index, cascade in enumerate(cascades):
         if cascade.empty():
@@ -440,10 +445,25 @@ class BrowserWorker(threading.Thread):
 
 
 class App:
+    COLORS = {
+        "canvas": "#F2F5F6",
+        "surface": "#FFFFFF",
+        "ink": "#1D3442",
+        "muted": "#657982",
+        "line": "#D9E2E5",
+        "hero": "#173746",
+        "accent": "#F0522B",
+        "accent_active": "#D94120",
+        "teal": "#147A72",
+        "warning": "#A96015",
+        "error": "#B84236",
+    }
+
     def __init__(self, root: Tk):
         self.root = root
         self.root.title("淘宝图片助手")
-        self.root.geometry("760x520")
+        self.root.geometry("1060x760")
+        self.root.minsize(880, 640)
         self.worker = BrowserWorker()
         self.worker.start()
         self.images: list[ProductImage] = []
@@ -452,74 +472,256 @@ class App:
         self.mirror = BooleanVar(value=True)
         self.mosaic = BooleanVar(value=True)
         self.status = StringVar(value="粘贴商品链接，然后打开商品页。")
+        self.main_count = StringVar(value="主图 0")
+        self.detail_count = StringVar(value="详情图 0")
+        self.busy = False
+        self.page_open = False
         self.build_ui()
         self.root.after(150, self.poll_events)
         self.root.protocol("WM_DELETE_WINDOW", self.close)
 
     def build_ui(self):
-        frame = ttk.Frame(self.root, padding=16)
-        frame.pack(fill="both", expand=True)
-        ttk.Label(frame, text="淘宝商品链接").grid(row=0, column=0, sticky="w")
-        ttk.Entry(frame, textvariable=self.url).grid(row=1, column=0, columnspan=4, sticky="ew", pady=(4, 12))
-        ttk.Button(frame, text="打开商品页", command=self.open_page).grid(row=2, column=0, sticky="w")
-        ttk.Button(frame, text="扫描图片", command=self.scan).grid(row=2, column=1, sticky="w", padx=8)
-        ttk.Button(frame, text="下载并处理", command=self.download).grid(row=2, column=2, sticky="w")
-        ttk.Button(frame, text="导出页面诊断", command=self.diagnose).grid(row=2, column=3, sticky="e", padx=(8, 0))
-        ttk.Label(frame, text="保存位置").grid(row=3, column=0, sticky="w", pady=(16, 0))
-        ttk.Entry(frame, textvariable=self.output_dir).grid(row=4, column=0, columnspan=2, sticky="ew", pady=4)
-        ttk.Button(frame, text="选择…", command=self.choose_folder).grid(row=4, column=2, sticky="e")
-        options = ttk.Frame(frame)
-        options.grid(row=5, column=0, columnspan=3, sticky="w", pady=8)
-        ttk.Checkbutton(options, text="左右镜像", variable=self.mirror).pack(side="left", padx=(0, 18))
-        ttk.Checkbutton(options, text="人脸打马赛克", variable=self.mosaic).pack(side="left")
-        ttk.Label(frame, text="扫描到的图片（类型可手动修正）").grid(row=6, column=0, sticky="w", pady=(10, 4))
-        self.listbox = Listbox(frame, height=10)
-        self.listbox.grid(row=7, column=0, columnspan=3, sticky="nsew")
-        category_buttons = ttk.Frame(frame)
-        category_buttons.grid(row=8, column=0, columnspan=3, sticky="w", pady=(5, 0))
-        ttk.Button(category_buttons, text="设为主图", command=lambda: self.set_category("主图")).pack(side="left", padx=(0, 8))
-        ttk.Button(category_buttons, text="设为详情图", command=lambda: self.set_category("详情图")).pack(side="left")
-        ttk.Label(frame, textvariable=self.status, wraplength=710).grid(row=9, column=0, columnspan=3, sticky="w", pady=(8, 0))
-        frame.columnconfigure(0, weight=1)
-        frame.columnconfigure(1, weight=1)
-        frame.rowconfigure(7, weight=1)
+        c = self.COLORS
+        self.root.configure(background=c["canvas"])
+        style = ttk.Style(self.root)
+        if "clam" in style.theme_names():
+            style.theme_use("clam")
+        families = set(tkfont.families(self.root))
+        family = next((name for name in ("Microsoft YaHei UI", "Segoe UI", "PingFang SC") if name in families), "TkDefaultFont")
+        style.configure(".", font=(family, 10), foreground=c["ink"])
+        style.configure("App.TFrame", background=c["canvas"])
+        style.configure("Hero.TFrame", background=c["hero"])
+        style.configure("Card.TFrame", background=c["surface"], bordercolor=c["line"], borderwidth=1, relief="solid")
+        style.configure("HeroMark.TLabel", background=c["accent"], foreground="#FFFFFF", font=(family, 18, "bold"), padding=(11, 5))
+        style.configure("HeroTitle.TLabel", background=c["hero"], foreground="#FFFFFF", font=(family, 18, "bold"))
+        style.configure("HeroSub.TLabel", background=c["hero"], foreground="#C4D2D7", font=(family, 9))
+        style.configure("HeroTag.TLabel", background="#244B59", foreground="#E2F0EF", font=(family, 9, "bold"), padding=(10, 7))
+        style.configure("Section.TLabel", background=c["surface"], foreground=c["ink"], font=(family, 12, "bold"))
+        style.configure("Hint.TLabel", background=c["surface"], foreground=c["muted"], font=(family, 9))
+        style.configure("Field.TEntry", padding=(9, 8), fieldbackground="#FBFCFC", bordercolor=c["line"], lightcolor=c["line"], darkcolor=c["line"])
+        style.configure("Primary.TButton", background=c["accent"], foreground="#FFFFFF", borderwidth=0, padding=(13, 9), font=(family, 9, "bold"))
+        style.map("Primary.TButton", background=[("disabled", "#D8DEDF"), ("pressed", c["accent_active"]), ("active", "#F56B48")], foreground=[("disabled", "#89969A")])
+        style.configure("Secondary.TButton", background="#EAF0F1", foreground=c["ink"], borderwidth=0, padding=(12, 8), font=(family, 9, "bold"))
+        style.map("Secondary.TButton", background=[("disabled", "#EFF2F2"), ("pressed", "#DDE7E9"), ("active", "#DDE7E9")])
+        style.configure("Quiet.TButton", background=c["surface"], foreground=c["muted"], borderwidth=0, padding=(8, 7))
+        style.map("Quiet.TButton", background=[("disabled", c["surface"]), ("active", "#F3F6F6")])
+        style.configure("Option.TCheckbutton", background=c["surface"], foreground=c["ink"], padding=(0, 4))
+        style.map("Option.TCheckbutton", background=[("active", c["surface"])])
+        style.configure("Count.TLabel", background="#EEF2F3", foreground=c["ink"], padding=(9, 5), font=(family, 9, "bold"))
+        style.configure("Images.Treeview", background="#FFFFFF", fieldbackground="#FFFFFF", foreground=c["ink"], rowheight=30, borderwidth=0, font=(family, 9))
+        style.configure("Images.Treeview.Heading", background="#F1F4F5", foreground=c["muted"], relief="flat", padding=(9, 8), font=(family, 9, "bold"))
+        style.map("Images.Treeview", background=[("selected", "#DCECEF")], foreground=[("selected", c["ink"])])
+        for name, bg, fg in (("Idle", "#EAF0F1", c["muted"]), ("Working", "#EAF1F8", "#315B83"), ("Ready", "#E8F1EC", c["teal"]), ("Done", "#E8F1EC", c["teal"]), ("Warning", "#F7EFE3", c["warning"]), ("Error", "#F8E9E7", c["error"])):
+            style.configure(f"Status{name}.TFrame", background=bg)
+            style.configure(f"Status{name}.TLabel", background=bg, foreground=fg, font=(family, 9))
+            style.configure(f"Status{name}Dot.TLabel", background=bg, foreground=fg, font=(family, 10, "bold"))
+
+        hero = ttk.Frame(self.root, style="Hero.TFrame", padding=(24, 18))
+        hero.pack(fill="x")
+        ttk.Label(hero, text="淘", style="HeroMark.TLabel").pack(side="left")
+        brand = ttk.Frame(hero, style="Hero.TFrame")
+        brand.pack(side="left", padx=(12, 0))
+        ttk.Label(brand, text="淘宝图片助手", style="HeroTitle.TLabel").pack(anchor="w")
+        ttk.Label(brand, text="主图与详情图下载 · 镜像 · 人脸马赛克", style="HeroSub.TLabel").pack(anchor="w", pady=(3, 0))
+        ttk.Label(hero, text="●  本机处理", style="HeroTag.TLabel").pack(side="right")
+
+        content = ttk.Frame(self.root, style="App.TFrame", padding=(22, 18, 22, 18))
+        content.pack(fill="both", expand=True)
+        content.columnconfigure(0, weight=1)
+        content.rowconfigure(1, weight=1)
+
+        top = ttk.Frame(content, style="App.TFrame")
+        top.grid(row=0, column=0, sticky="ew", pady=(0, 14))
+        top.columnconfigure(0, weight=11, uniform="top")
+        top.columnconfigure(1, weight=10, uniform="top")
+
+        page_card = ttk.Frame(top, style="Card.TFrame", padding=17)
+        page_card.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        ttk.Label(page_card, text="商品页面", style="Section.TLabel").pack(anchor="w")
+        ttk.Label(page_card, text="打开商品页后，在 Edge 中完成淘宝登录。", style="Hint.TLabel").pack(anchor="w", pady=(4, 13))
+        self.url_entry = ttk.Entry(page_card, textvariable=self.url, style="Field.TEntry")
+        self.url_entry.pack(fill="x")
+        self.url_entry.bind("<Return>", lambda _event: self.open_page())
+        page_actions = ttk.Frame(page_card, style="Card.TFrame")
+        page_actions.pack(fill="x", pady=(12, 0))
+        self.open_button = ttk.Button(page_actions, text="打开商品页", style="Primary.TButton", command=self.open_page)
+        self.open_button.pack(side="left")
+        self.scan_button = ttk.Button(page_actions, text="扫描图片", style="Secondary.TButton", command=self.scan)
+        self.scan_button.pack(side="left", padx=(8, 0))
+        self.diagnose_button = ttk.Button(page_actions, text="页面诊断", style="Quiet.TButton", command=self.diagnose)
+        self.diagnose_button.pack(side="right")
+
+        settings_card = ttk.Frame(top, style="Card.TFrame", padding=17)
+        settings_card.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
+        ttk.Label(settings_card, text="保存与处理", style="Section.TLabel").pack(anchor="w")
+        ttk.Label(settings_card, text="每次任务会新建文件夹，原图与处理结果分开保存。", style="Hint.TLabel").pack(anchor="w", pady=(4, 10))
+        folder_row = ttk.Frame(settings_card, style="Card.TFrame")
+        folder_row.pack(fill="x")
+        self.folder_entry = ttk.Entry(folder_row, textvariable=self.output_dir, style="Field.TEntry")
+        self.folder_entry.pack(side="left", fill="x", expand=True)
+        self.folder_button = ttk.Button(folder_row, text="选择…", style="Secondary.TButton", command=self.choose_folder)
+        self.folder_button.pack(side="left", padx=(7, 0))
+        options = ttk.Frame(settings_card, style="Card.TFrame")
+        options.pack(fill="x", pady=(8, 5))
+        self.mirror_option = ttk.Checkbutton(options, text="左右镜像", variable=self.mirror, style="Option.TCheckbutton")
+        self.mirror_option.pack(side="left", padx=(0, 16))
+        self.mosaic_option = ttk.Checkbutton(options, text="人脸打马赛克", variable=self.mosaic, style="Option.TCheckbutton")
+        self.mosaic_option.pack(side="left")
+        self.download_button = ttk.Button(settings_card, text="下载并处理图片", style="Primary.TButton", command=self.download)
+        self.download_button.pack(fill="x", pady=(3, 0))
+
+        results = ttk.Frame(content, style="Card.TFrame", padding=(16, 14, 16, 12))
+        results.grid(row=1, column=0, sticky="nsew")
+        results.columnconfigure(0, weight=1)
+        results.rowconfigure(1, weight=1)
+        result_header = ttk.Frame(results, style="Card.TFrame")
+        result_header.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        ttk.Label(result_header, text="扫描结果", style="Section.TLabel").pack(side="left")
+        counts = ttk.Frame(result_header, style="Card.TFrame")
+        counts.pack(side="right")
+        ttk.Label(counts, textvariable=self.main_count, style="Count.TLabel").pack(side="left", padx=(0, 6))
+        ttk.Label(counts, textvariable=self.detail_count, style="Count.TLabel").pack(side="left")
+
+        table = ttk.Frame(results, style="Card.TFrame")
+        table.grid(row=1, column=0, sticky="nsew")
+        table.columnconfigure(0, weight=1)
+        table.rowconfigure(0, weight=1)
+        self.tree = ttk.Treeview(table, columns=("category", "url"), show="headings", selectmode="browse", style="Images.Treeview")
+        self.tree.heading("category", text="图片类型")
+        self.tree.heading("url", text="图片地址")
+        self.tree.column("category", width=110, minwidth=90, stretch=False, anchor="w")
+        self.tree.column("url", width=760, minwidth=280, stretch=True, anchor="w")
+        self.tree.grid(row=0, column=0, sticky="nsew")
+        self.tree.bind("<<TreeviewSelect>>", lambda _event: self.refresh_controls())
+        vertical = ttk.Scrollbar(table, orient="vertical", command=self.tree.yview)
+        vertical.grid(row=0, column=1, sticky="ns")
+        horizontal = ttk.Scrollbar(table, orient="horizontal", command=self.tree.xview)
+        horizontal.grid(row=1, column=0, sticky="ew")
+        self.tree.configure(yscrollcommand=vertical.set, xscrollcommand=horizontal.set)
+        self.empty_label = ttk.Label(table, text="扫描后，主图和详情图会显示在这里。", style="Hint.TLabel")
+        self.empty_label.place(relx=0.5, rely=0.5, anchor="center")
+
+        table_actions = ttk.Frame(results, style="Card.TFrame")
+        table_actions.grid(row=2, column=0, sticky="ew", pady=(9, 0))
+        ttk.Label(table_actions, text="选中图片后调整类型：", style="Hint.TLabel").pack(side="left", padx=(0, 7))
+        self.main_button = ttk.Button(table_actions, text="设为主图", style="Quiet.TButton", command=lambda: self.set_category("主图"))
+        self.main_button.pack(side="left", padx=(0, 5))
+        self.detail_button = ttk.Button(table_actions, text="设为详情图", style="Quiet.TButton", command=lambda: self.set_category("详情图"))
+        self.detail_button.pack(side="left")
+
+        status_panel = ttk.Frame(content, style="StatusIdle.TFrame", padding=(12, 9))
+        status_panel.grid(row=2, column=0, sticky="ew", pady=(12, 0))
+        self.status_dot = ttk.Label(status_panel, text="●", style="StatusIdleDot.TLabel")
+        self.status_dot.pack(side="left", padx=(0, 8))
+        self.status_label = ttk.Label(status_panel, textvariable=self.status, style="StatusIdle.TLabel", wraplength=900, justify="left")
+        self.status_label.pack(side="left", fill="x", expand=True)
+        self.status_panel = status_panel
+        self.refresh_controls()
+
+    def set_status(self, text: str, kind: str = "Idle"):
+        self.status.set(text)
+        self.status_panel.configure(style=f"Status{kind}.TFrame")
+        self.status_dot.configure(style=f"Status{kind}Dot.TLabel")
+        self.status_label.configure(style=f"Status{kind}.TLabel")
+
+    def refresh_controls(self):
+        enabled = not self.busy
+        self.open_button.configure(state="normal" if enabled else "disabled")
+        self.scan_button.configure(state="normal" if enabled and self.page_open else "disabled")
+        self.diagnose_button.configure(state="normal" if enabled and self.page_open else "disabled")
+        self.download_button.configure(state="normal" if enabled and self.images else "disabled")
+        self.folder_button.configure(state="normal" if enabled else "disabled")
+        self.folder_entry.configure(state="normal" if enabled else "disabled")
+        self.mirror_option.configure(state="normal" if enabled else "disabled")
+        self.mosaic_option.configure(state="normal" if enabled else "disabled")
+        tree_state = "!disabled" if enabled else "disabled"
+        self.tree.state([tree_state])
+        has_selection = bool(self.tree.selection())
+        self.main_button.configure(state="normal" if enabled and has_selection else "disabled")
+        self.detail_button.configure(state="normal" if enabled and has_selection else "disabled")
+
+    def replace_images(self, images: list[ProductImage]):
+        self.images = images
+        children = self.tree.get_children()
+        if children:
+            self.tree.delete(*children)
+        main = detail = 0
+        for index, item in enumerate(images):
+            self.tree.insert("", "end", iid=str(index), values=(item.category, item.url))
+            if item.category == "主图":
+                main += 1
+            else:
+                detail += 1
+        self.main_count.set(f"主图 {main}")
+        self.detail_count.set(f"详情图 {detail}")
+        if images:
+            self.empty_label.place_forget()
+        else:
+            self.empty_label.place(relx=0.5, rely=0.5, anchor="center")
+        self.refresh_controls()
 
     def open_page(self):
+        if self.busy:
+            return
         try:
             url = valid_product_url(self.url.get())
         except ValueError as exc:
             messagebox.showerror("链接无效", str(exc))
             return
-        self.status.set("正在打开浏览器…")
+        self.page_open = False
+        self.replace_images([])
+        self.busy = True
+        self.set_status("正在打开 Edge 商品页…", "Working")
+        self.refresh_controls()
         self.worker.commands.put(("open", url))
 
     def set_category(self, category: str):
-        selection = self.listbox.curselection()
-        if not selection:
-            messagebox.showinfo("先选择图片", "请先在列表中选择一张图片。")
+        selection = self.tree.selection()
+        if not selection or self.busy:
             return
-        index = selection[0]
+        index = int(selection[0])
         self.images[index].category = category
-        self.listbox.delete(index)
-        self.listbox.insert(index, f"{category}  {self.images[index].url}")
-        self.listbox.selection_set(index)
+        self.tree.item(selection[0], values=(category, self.images[index].url))
+        self.replace_images(self.images)
+        self.tree.selection_set(str(index))
+        self.refresh_controls()
 
     def scan(self):
-        self.status.set("正在扫描页面，请稍候…")
+        if self.busy or not self.page_open:
+            return
+        self.replace_images([])
+        self.busy = True
+        self.set_status("正在读取商品主图和详情图…", "Working")
+        self.refresh_controls()
         self.worker.commands.put(("scan",))
 
     def diagnose(self):
-        self.status.set("正在导出页面结构（不包含 Cookie 和图片地址）…")
+        if self.busy or not self.page_open:
+            return
+        self.busy = True
+        self.set_status("正在导出页面结构（不含 Cookie 和图片地址）…", "Working")
+        self.refresh_controls()
         self.worker.commands.put(("diagnose",))
 
     def download(self):
+        if self.busy:
+            return
         if not self.images:
             messagebox.showinfo("还没有图片", "请先打开商品页并扫描图片。")
             return
-        self.status.set("正在下载和处理图片…")
-        self.worker.commands.put(("download", list(self.images), Path(self.output_dir.get()), self.mirror.get(), self.mosaic.get()))
+        raw_output = self.output_dir.get().strip()
+        output_path = Path(raw_output).expanduser()
+        if not raw_output or not output_path.is_absolute():
+            messagebox.showerror("保存位置无效", "请选择一个完整的保存文件夹路径。")
+            return
+        self.busy = True
+        self.set_status("正在下载并处理图片…", "Working")
+        self.refresh_controls()
+        self.worker.commands.put(("download", list(self.images), output_path, self.mirror.get(), self.mosaic.get()))
 
     def choose_folder(self):
+        if self.busy:
+            return
         selected = filedialog.askdirectory(initialdir=self.output_dir.get() or str(Path.home()))
         if selected:
             self.output_dir.set(selected)
@@ -529,36 +731,44 @@ class App:
             while True:
                 kind, value = self.worker.events.get_nowait()
                 if kind == "opened":
-                    self.status.set(value)
+                    self.page_open = True
+                    self.busy = False
+                    self.set_status(value, "Ready")
                 elif kind == "scanned":
-                    self.images, warning = value
-                    self.listbox.delete(0, END)
-                    for item in self.images:
-                        self.listbox.insert(END, f"{item.category}  {item.url}")
+                    images, warning = value
+                    self.replace_images(images)
+                    self.busy = False
                     message = f"扫描完成：找到 {len(self.images)} 张图片。"
                     if warning:
                         message += " " + warning + "。"
-                    self.status.set(message)
+                    self.set_status(message, "Ready" if self.images else "Warning")
                 elif kind == "progress":
-                    self.status.set(value)
+                    self.set_status(value, "Working")
                 elif kind == "complete":
                     ok, failed, faces, folder, failure_log = value
-                    self.status.set(f"完成：成功 {ok} 张，失败 {failed} 张，马赛克处理 {faces} 张脸。")
+                    self.busy = False
+                    self.set_status(f"完成：成功 {ok} 张，失败 {failed} 张，马赛克处理 {faces} 张脸。", "Warning" if failed else "Done")
                     details = f"\n失败详情：\n{failure_log}" if failure_log else ""
-                    messagebox.showinfo(
-                        "下载完成",
-                        f"已保存到：\n{folder}\n\n成功 {ok} 张，失败 {failed} 张。{details}",
-                    )
+                    message = f"已保存到：\n{folder}\n\n成功 {ok} 张，失败 {failed} 张，识别人脸 {faces} 张。{details}"
+                    (messagebox.showwarning if failed else messagebox.showinfo)("下载完成", message)
                 elif kind == "diagnosed":
+                    self.busy = False
+                    self.set_status("页面诊断文件已导出。", "Done")
                     messagebox.showinfo(
                         "诊断已导出",
                         f"诊断文件已保存到：\n{value}\n\n文件不包含 Cookie、商品标题或图片地址。请把 JSON 文件发给开发者。",
                     )
                 elif kind == "error":
-                    self.status.set(value)
+                    self.busy = False
+                    self.set_status(value, "Error")
                     messagebox.showerror("操作失败", value)
+                elif kind == "stopped":
+                    self.page_open = False
+                    self.busy = False
+                    self.set_status("浏览器服务已停止。重新打开商品页即可继续。", "Warning")
         except queue.Empty:
             pass
+        self.refresh_controls()
         self.root.after(150, self.poll_events)
 
     def close(self):
