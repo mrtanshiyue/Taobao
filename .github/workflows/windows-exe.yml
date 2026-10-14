@@ -1,0 +1,35 @@
+name: Build Windows EXE
+
+on:
+  push:
+    branches:
+      - main
+      - "codex/**"
+    paths:
+      - "taobao-image-helper/**"
+      - ".github/workflows/windows-exe.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - name: Build application
+        shell: cmd
+        run: call taobao-image-helper\build_exe.bat
+      - uses: actions/upload-artifact@v7
+        with:
+          name: taobao-image-helper-windows
+          path: |
+            taobao-image-helper/dist/淘宝图片助手.exe
+            taobao-image-helper/dist/第三方模型许可证.txt
+          if-no-files-found: error
+          retention-days: 30
