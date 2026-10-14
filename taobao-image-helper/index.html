@@ -23,7 +23,7 @@
     * { box-sizing: border-box; }
     body { margin: 0; background: var(--paper); color: var(--ink); }
     button, input { font: inherit; }
-    button:focus-visible, input:focus-visible { outline: 3px solid #83acd9; outline-offset: 2px; }
+    button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid #83acd9; outline-offset: 2px; }
     .shell { width: min(1100px, calc(100% - 40px)); margin: 0 auto; padding: 34px 0 52px; }
     header { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-bottom: 34px; }
     .brand { display: flex; align-items: center; gap: 13px; }
@@ -70,11 +70,11 @@
     .results-head h2 { margin: 0; font-size: 16px; }
     .counts { display: flex; gap: 8px; color: var(--muted); font-size: 12px; }
     .count { background: #edf3f5; border-radius: 5px; padding: 5px 8px; }
-    .table-head, .image-row { display: grid; grid-template-columns: 105px minmax(0, 1fr); align-items: center; gap: 12px; }
+    .table-head, .image-row { display: grid; grid-template-columns: 125px minmax(0, 1fr); align-items: center; gap: 12px; }
     .table-head { padding: 9px 23px; background: #f6f8f9; color: #758790; font-size: 11px; font-weight: 700; }
     .image-list { max-height: 330px; overflow: auto; }
     .image-row { padding: 11px 23px; border-top: 1px solid #edf1f3; font-size: 12px; }
-    .category { justify-self: start; padding: 4px 7px; border-radius: 5px; color: #315875; background: #e7f0f6; font-weight: 700; }
+    .category { justify-self: start; max-width: 100%; border: 0; padding: 4px 7px; border-radius: 5px; color: #315875; background: #e7f0f6; font: inherit; font-weight: 700; cursor: pointer; }
     .category.detail { color: #176f72; background: var(--aqua); }
     .image-url { color: #667b86; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .empty { padding: 33px 23px 36px; color: #778a94; font-size: 13px; text-align: center; }
@@ -138,7 +138,7 @@
           <label class="check"><input id="mosaic" type="checkbox" checked> 识别人脸并打马赛克</label>
         </div>
         <button id="download-button" class="button download" type="button" disabled>下载并处理图片</button>
-        <p class="hint">原图和处理结果会分别保存在“下载原图”和“处理后”文件夹。</p>
+        <p class="hint">每次下载会创建独立文件夹，原图和处理结果分别放在“下载原图”和“处理后”。</p>
       </div>
     </section>
 
@@ -149,7 +149,7 @@
         <h2 id="results-title">扫描结果</h2>
         <div class="counts"><span class="count">主图 <b id="main-count">0</b></span><span class="count">详情图 <b id="detail-count">0</b></span></div>
       </div>
-      <div class="table-head"><span>类型</span><span>图片地址</span></div>
+      <div class="table-head"><span>图片类型（可修改）</span><span>图片地址</span></div>
       <div id="image-list" class="image-list"><div class="empty">扫描后，找到的图片会显示在这里。</div></div>
     </section>
     <footer>本地服务仅监听此电脑。下载图片和人脸处理均在本机完成。</footer>
@@ -171,9 +171,12 @@
       if (!response.ok) throw new Error(body.error || "操作失败。");
     }
 
-    function renderImages(images) {
+    function renderImages(images, busy) {
       const signature = images.map((item) => item.category + item.url).join("\n");
-      if (signature === lastSignature) return;
+      if (signature === lastSignature) {
+        $("image-list").querySelectorAll("select[data-index]").forEach((select) => { select.disabled = busy; });
+        return;
+      }
       lastSignature = signature;
       const list = $("image-list");
       list.replaceChildren();
@@ -185,14 +188,23 @@
       }
       let main = 0;
       let detail = 0;
-      for (const item of images) {
+      for (const [index, item] of images.entries()) {
         if (item.category === "主图") main++;
         else detail++;
         const row = document.createElement("div");
         row.className = "image-row";
-        const badge = document.createElement("span");
+        const badge = document.createElement("select");
         badge.className = "category" + (item.category === "详情图" ? " detail" : "");
-        badge.textContent = item.category;
+        badge.setAttribute("aria-label", "第 " + (index + 1) + " 张图片类型");
+        badge.dataset.index = index;
+        badge.disabled = busy;
+        for (const category of ["主图", "详情图"]) {
+          const option = document.createElement("option");
+          option.value = category;
+          option.textContent = category;
+          badge.append(option);
+        }
+        badge.value = item.category;
         const address = document.createElement("span");
         address.className = "image-url";
         address.textContent = item.url;
@@ -214,7 +226,7 @@
           $("output-dir").value = state.output_dir;
           outputInitialized = true;
         }
-        renderImages(state.images);
+        renderImages(state.images, state.busy);
         $("open-button").disabled = state.busy;
         $("scan-button").disabled = state.busy || !state.page_open;
         $("download-button").disabled = state.busy || !state.images.length;
@@ -231,6 +243,14 @@
     });
     $("scan-button").addEventListener("click", async () => {
       try { await post("/api/scan", {}); }
+      catch (error) { statusEl.textContent = error.message; statusEl.dataset.kind = "error"; }
+      refresh();
+    });
+    $("image-list").addEventListener("change", async (event) => {
+      const select = event.target.closest("select[data-index]");
+      if (!select) return;
+      select.classList.toggle("detail", select.value === "详情图");
+      try { await post("/api/category", { index: Number(select.dataset.index), category: select.value }); }
       catch (error) { statusEl.textContent = error.message; statusEl.dataset.kind = "error"; }
       refresh();
     });

@@ -3,9 +3,11 @@ from __future__ import annotations
 import html
 import mimetypes
 import queue
+import tempfile
 import threading
 import urllib.parse
 from dataclasses import dataclass
+from datetime import datetime
 from io import BytesIO
 from pathlib import Path
 from tkinter import BooleanVar, END, Listbox, StringVar, Tk, filedialog, messagebox
@@ -22,12 +24,36 @@ except ImportError as exc:
 
 APP_DIR = Path.home() / ".taobao_image_helper"
 IMAGE_HOSTS = ("alicdn.com", "tbcdn.cn", "taobao.com", "taobaocdn.com")
+PRODUCT_HOSTS = ("taobao.com", "tmall.com", "tmall.hk", "tb.cn")
 
 
 @dataclass
 class ProductImage:
     url: str
     category: str
+
+
+def valid_product_url(value: str) -> str:
+    value = value.strip()
+    if not value:
+        raise ValueError("请先粘贴淘宝商品链接。")
+    if "://" not in value:
+        value = "https://" + value
+    try:
+        parsed = urllib.parse.urlparse(value)
+        host = (parsed.hostname or "").lower()
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("请输入有效的淘宝、天猫或淘宝短链接。") from exc
+    if (
+        parsed.scheme != "https"
+        or port not in (None, 443)
+        or parsed.username
+        or parsed.password
+        or not any(host == domain or host.endswith("." + domain) for domain in PRODUCT_HOSTS)
+    ):
+        raise ValueError("请输入 HTTPS 的淘宝、天猫或淘宝短链接。")
+    return value
 
 
 def image_url(value: str) -> str | None:
@@ -44,37 +70,41 @@ def image_url(value: str) -> str | None:
     return value
 
 
-def scan_product_page(page) -> list[ProductImage]:
+def scan_product_page(page) -> tuple[list[ProductImage], str]:
     detail_boundary = 1600
+    detail_tab_found = False
     try:
         detail_tab = page.get_by_text("商品详情", exact=True).first
         box = detail_tab.bounding_box()
         if box:
             detail_boundary = box["y"] + page.evaluate("window.scrollY")
+            detail_tab_found = True
         detail_tab.click(timeout=1200)
         page.wait_for_timeout(350)
     except Exception:
         pass
 
     found: dict[str, str] = {}
-    # ponytail: cap scans at 40k px; raise it for unusually long product pages.
-    max_scroll = 40000
+    max_scroll = 120000
+    truncated = False
+    frame_read_failed = False
     for position in range(0, max_scroll + 1, 750):
         page.evaluate("(position) => window.scrollTo(0, position)", position)
-        page.wait_for_timeout(180)
+        page.wait_for_timeout(300)
         for frame in page.frames:
             try:
                 frame_box = frame.frame_element().bounding_box() if frame != page.main_frame else None
                 frame_offset = (frame_box["y"] + page.evaluate("window.scrollY")) if frame_box else 0
                 images = frame.evaluate("""() => Array.from(document.images).map(img => ({
                     urls: [img.currentSrc, img.src, img.getAttribute('data-src'),
-                           img.getAttribute('data-ks-lazyload'), img.getAttribute('data-lazyload')],
+                           img.getAttribute('data-ks-lazyload'), img.getAttribute('data-lazyload'),
+                           img.getAttribute('data-original'), img.getAttribute('data-lazy-src')],
                     width: img.naturalWidth || img.width,
                     height: img.naturalHeight || img.height,
                     y: img.getBoundingClientRect().top + window.scrollY
                 }))""")
                 for item in images:
-                    if item["width"] < 100 or item["height"] < 100:
+                    if item["width"] < 60 or item["height"] < 60:
                         continue
                     for candidate in item["urls"]:
                         url = image_url(candidate)
@@ -84,16 +114,27 @@ def scan_product_page(page) -> list[ProductImage]:
                             found.setdefault(url, category)
                             break
             except Exception:
+                frame_read_failed = True
                 continue
 
         height = page.evaluate("Math.max(document.body.scrollHeight, document.documentElement.scrollHeight)")
         if position >= height - 800:
             break
+    else:
+        truncated = True
     page.evaluate("window.scrollTo(0, 0)")
-    return [ProductImage(url, category) for url, category in found.items()]
+    warnings = []
+    if truncated:
+        warnings.append("页面达到扫描上限，可能还有图片未找到")
+    if frame_read_failed:
+        warnings.append("部分页面区域无法读取，结果可能不完整")
+    if not detail_tab_found:
+        warnings.append("未定位到商品详情分界线，图片分类为估算，可手动修正")
+    return [ProductImage(url, category) for url, category in found.items()], "；".join(warnings)
 
 
 def face_boxes(rgb: np.ndarray) -> list[tuple[int, int, int, int]]:
+    # shortcut: Haar cascades can still miss occluded faces; use a trained detector for higher recall.
     gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
     cascades = [
         cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml"),
@@ -108,7 +149,7 @@ def face_boxes(rgb: np.ndarray) -> list[tuple[int, int, int, int]]:
             variants.append((cv2.flip(gray, 1), True))
         for variant, flipped in variants:
             for x, y, w, h in cascade.detectMultiScale(
-                variant, scaleFactor=1.1, minNeighbors=5, minSize=(40, 40)
+                variant, scaleFactor=1.05, minNeighbors=4, minSize=(24, 24)
             ):
                 boxes.append((gray.shape[1] - x - w if flipped else x, y, w, h))
 
@@ -189,8 +230,8 @@ class BrowserWorker(threading.Thread):
                         elif kind == "scan":
                             if not page:
                                 raise RuntimeError("请先打开商品链接。")
-                            images = scan_product_page(page)
-                            self.emit("scanned", images)
+                            images, warning = scan_product_page(page)
+                            self.emit("scanned", (images, warning))
                         elif kind == "download":
                             if not context:
                                 raise RuntimeError("请先打开商品链接。")
@@ -208,8 +249,10 @@ class BrowserWorker(threading.Thread):
             self.emit("stopped")
 
     def download(self, context, images, output_dir: Path, mirror: bool, mosaic: bool):
-        originals = output_dir / "下载原图"
-        processed = output_dir / "处理后"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        run_dir = Path(tempfile.mkdtemp(prefix=f"{datetime.now():%Y%m%d_%H%M%S}_", dir=output_dir))
+        originals = run_dir / "下载原图"
+        processed = run_dir / "处理后"
         originals.mkdir(parents=True, exist_ok=True)
         if mirror or mosaic:
             processed.mkdir(parents=True, exist_ok=True)
@@ -240,7 +283,7 @@ class BrowserWorker(threading.Thread):
                 self.emit("progress", f"{index}/{len(images)}：跳过一张（{exc}）")
                 continue
             self.emit("progress", f"已处理 {index}/{len(images)} 张，识别到 {face_total} 张脸")
-        self.emit("complete", (ok, failed, face_total, str(output_dir)))
+        self.emit("complete", (ok, failed, face_total, str(run_dir)))
 
 
 class App:
@@ -275,21 +318,37 @@ class App:
         options.grid(row=5, column=0, columnspan=3, sticky="w", pady=8)
         ttk.Checkbutton(options, text="左右镜像", variable=self.mirror).pack(side="left", padx=(0, 18))
         ttk.Checkbutton(options, text="人脸打马赛克", variable=self.mosaic).pack(side="left")
-        ttk.Label(frame, text="扫描到的图片").grid(row=6, column=0, sticky="w", pady=(10, 4))
-        self.listbox = Listbox(frame, height=13)
+        ttk.Label(frame, text="扫描到的图片（类型可手动修正）").grid(row=6, column=0, sticky="w", pady=(10, 4))
+        self.listbox = Listbox(frame, height=10)
         self.listbox.grid(row=7, column=0, columnspan=3, sticky="nsew")
-        ttk.Label(frame, textvariable=self.status, wraplength=710).grid(row=8, column=0, columnspan=3, sticky="w", pady=(10, 0))
+        category_buttons = ttk.Frame(frame)
+        category_buttons.grid(row=8, column=0, columnspan=3, sticky="w", pady=(5, 0))
+        ttk.Button(category_buttons, text="设为主图", command=lambda: self.set_category("主图")).pack(side="left", padx=(0, 8))
+        ttk.Button(category_buttons, text="设为详情图", command=lambda: self.set_category("详情图")).pack(side="left")
+        ttk.Label(frame, textvariable=self.status, wraplength=710).grid(row=9, column=0, columnspan=3, sticky="w", pady=(8, 0))
         frame.columnconfigure(0, weight=1)
         frame.columnconfigure(1, weight=1)
         frame.rowconfigure(7, weight=1)
 
     def open_page(self):
-        url = self.url.get().strip()
-        if not url.startswith(("https://", "http://")):
-            messagebox.showerror("链接无效", "请输入完整的淘宝商品链接。")
+        try:
+            url = valid_product_url(self.url.get())
+        except ValueError as exc:
+            messagebox.showerror("链接无效", str(exc))
             return
         self.status.set("正在打开浏览器…")
         self.worker.commands.put(("open", url))
+
+    def set_category(self, category: str):
+        selection = self.listbox.curselection()
+        if not selection:
+            messagebox.showinfo("先选择图片", "请先在列表中选择一张图片。")
+            return
+        index = selection[0]
+        self.images[index].category = category
+        self.listbox.delete(index)
+        self.listbox.insert(index, f"{category}  {self.images[index].url}")
+        self.listbox.selection_set(index)
 
     def scan(self):
         self.status.set("正在扫描页面，请稍候…")
@@ -314,11 +373,14 @@ class App:
                 if kind == "opened":
                     self.status.set(value)
                 elif kind == "scanned":
-                    self.images = value
+                    self.images, warning = value
                     self.listbox.delete(0, END)
-                    for item in value:
+                    for item in self.images:
                         self.listbox.insert(END, f"{item.category}  {item.url}")
-                    self.status.set(f"扫描完成：找到 {len(value)} 张图片。")
+                    message = f"扫描完成：找到 {len(self.images)} 张图片。"
+                    if warning:
+                        message += " " + warning + "。"
+                    self.status.set(message)
                 elif kind == "progress":
                     self.status.set(value)
                 elif kind == "complete":

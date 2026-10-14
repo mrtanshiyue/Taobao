@@ -6,13 +6,11 @@ import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
 
-from app import BrowserWorker
+from app import BrowserWorker, valid_product_url
 
 
 PAGE = Path(__file__).with_name("index.html")
-ALLOWED_TAOBAO_HOSTS = ("taobao.com", "tmall.com", "tmall.hk", "tb.cn")
 
 
 class LocalApp:
@@ -41,10 +39,12 @@ class LocalApp:
                     self.status = value
                     self.status_kind = "ready"
                 elif kind == "scanned":
-                    self.images = value
+                    self.images, warning = value
                     self.busy = False
-                    self.status = f"扫描完成：找到 {len(value)} 张图片。"
-                    self.status_kind = "ready" if value else "error"
+                    self.status = f"扫描完成：找到 {len(self.images)} 张图片。"
+                    if warning:
+                        self.status += " " + warning + "。"
+                    self.status_kind = "ready" if self.images else "error"
                 elif kind == "progress":
                     self.status = value
                     self.status_kind = "working"
@@ -94,18 +94,15 @@ class LocalApp:
             self.result = None
             self.worker.commands.put((command, *args))
 
-
-def valid_product_url(value: str) -> str:
-    value = value.strip()
-    if not value:
-        raise ValueError("请先粘贴淘宝商品链接。")
-    if "://" not in value:
-        value = "https://" + value
-    parsed = urlparse(value)
-    host = (parsed.hostname or "").lower()
-    if parsed.scheme != "https" or not any(host == domain or host.endswith("." + domain) for domain in ALLOWED_TAOBAO_HOSTS):
-        raise ValueError("请输入淘宝、天猫或淘宝短链接。")
-    return value
+    def set_category(self, index, category):
+        with self.lock:
+            if self.busy:
+                raise ValueError("上一项操作还在进行，请稍候。")
+            if type(index) is not int or not 0 <= index < len(self.images):
+                raise ValueError("图片列表已变化，请重新扫描。")
+            if category not in ("主图", "详情图"):
+                raise ValueError("图片类型无效。")
+            self.images[index].category = category
 
 
 def serve():
@@ -173,6 +170,9 @@ def serve():
                             raise ValueError("请先打开商品页。")
                     app.command("scan")
                     message = "正在扫描页面图片。"
+                elif self.path == "/api/category":
+                    app.set_category(data.get("index"), data.get("category"))
+                    message = "图片类型已更新。"
                 elif self.path == "/api/download":
                     with app.lock:
                         if not app.page_open or not app.images:
