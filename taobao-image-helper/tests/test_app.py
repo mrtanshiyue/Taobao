@@ -1,12 +1,15 @@
 import unittest
 from io import BytesIO
+from unittest.mock import patch
 
+import numpy as np
 from PIL import Image
 
 from app import (
     _face_cascades,
     canonical_image_url,
     create_product_folder,
+    face_boxes,
     image_url,
     parse_product_urls,
     process_image,
@@ -59,6 +62,29 @@ class ImageHelpersTests(unittest.TestCase):
         self.assertFalse(frontal.empty())
         self.assertFalse(profile.empty())
         self.assertIs(_face_cascades(), cascades)
+
+    def test_face_detection_uses_stricter_settings(self):
+        class FakeCascade:
+            def __init__(self):
+                self.calls = []
+
+            def empty(self):
+                return False
+
+            def detectMultiScale(self, _image, **kwargs):
+                self.calls.append(kwargs)
+                return ()
+
+        frontal, profile = FakeCascade(), FakeCascade()
+        with patch("app._face_cascades", return_value=(frontal, profile)):
+            self.assertEqual(face_boxes(np.zeros((1200, 1600, 3), dtype=np.uint8)), [])
+
+        calls = frontal.calls + profile.calls
+        self.assertEqual(len(calls), 3)
+        for kwargs in calls:
+            self.assertEqual(kwargs["scaleFactor"], 1.1)
+            self.assertEqual(kwargs["minNeighbors"], 6)
+            self.assertEqual(kwargs["minSize"], (37, 37))
 
     def test_mirror_preserves_png_and_flips_pixels(self):
         source = Image.new("RGB", (2, 1))
