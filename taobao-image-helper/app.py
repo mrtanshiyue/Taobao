@@ -939,7 +939,7 @@ class App:
                         f"商品异常：{value['product_errors']}\n"
                         f"识别人脸：{value['faces']}\n\n商品文件夹：\n{folders}"
                     )
-                    (messagebox.showwarning if failed else messagebox.showinfo)("批量处理完成", message)
+                    (messagebox.showwarning if failed or value["product_errors"] else messagebox.showinfo)("批量处理完成", message)
                 elif kind == "diagnosed":
                     self.busy = False
                     self.set_status("页面诊断文件已导出。", "Done")
