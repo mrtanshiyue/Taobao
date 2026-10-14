@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>淘宝图片助手</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --paper: #f2f5f7;
+      --surface: #ffffff;
+      --ink: #182b3a;
+      --muted: #647985;
+      --line: #d6e0e5;
+      --blue: #275fc0;
+      --blue-dark: #1d4d9f;
+      --aqua: #dff0f1;
+      --teal: #087b80;
+      --red: #b54137;
+      font-family: "Inter", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+      font-synthesis: none;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--paper); color: var(--ink); }
+    button, input { font: inherit; }
+    button:focus-visible, input:focus-visible { outline: 3px solid #83acd9; outline-offset: 2px; }
+    .shell { width: min(1100px, calc(100% - 40px)); margin: 0 auto; padding: 34px 0 52px; }
+    header { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-bottom: 34px; }
+    .brand { display: flex; align-items: center; gap: 13px; }
+    .mark { width: 40px; height: 40px; display: grid; place-items: center; background: var(--ink); color: white; border-radius: 12px 12px 12px 3px; }
+    .mark svg { width: 23px; height: 23px; }
+    .brand-name { font-size: 16px; font-weight: 750; letter-spacing: .01em; }
+    .brand-caption { color: var(--muted); font-size: 12px; margin-top: 3px; }
+    .local-note { display: inline-flex; align-items: center; gap: 8px; color: var(--teal); font-size: 13px; font-weight: 650; }
+    .local-note::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: #19a197; box-shadow: 0 0 0 4px #d8efeb; }
+    .intro { margin-bottom: 25px; }
+    h1 { font-size: clamp(27px, 4vw, 38px); letter-spacing: -.04em; line-height: 1.14; margin: 0 0 10px; }
+    .intro p { margin: 0; color: var(--muted); font-size: 15px; line-height: 1.65; }
+    .workspace { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(270px, .85fr); gap: 18px; align-items: stretch; }
+    .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 15px; padding: 23px; }
+    .section-title { font-size: 15px; font-weight: 720; margin: 0 0 18px; }
+    label { display: block; color: #334d5a; font-size: 13px; font-weight: 650; margin-bottom: 8px; }
+    input[type="text"], input[type="url"] { width: 100%; min-height: 44px; border: 1px solid #c6d3da; border-radius: 8px; padding: 0 12px; background: #fff; color: var(--ink); }
+    input::placeholder { color: #8b9ba3; }
+    .url-row { display: flex; gap: 9px; }
+    .url-row input { min-width: 0; flex: 1; }
+    .button { min-height: 43px; border: 0; border-radius: 8px; padding: 0 15px; color: white; background: var(--blue); font-weight: 700; cursor: pointer; transition: background .15s ease, transform .15s ease; white-space: nowrap; }
+    .button:hover:not(:disabled) { background: var(--blue-dark); }
+    .button:active:not(:disabled) { transform: translateY(1px); }
+    .button:disabled { opacity: .45; cursor: not-allowed; }
+    .button.secondary { background: #e9f0f5; color: #2c485a; }
+    .button.secondary:hover:not(:disabled) { background: #dce8ef; }
+    .actions { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 13px; }
+    .output { margin-bottom: 20px; }
+    .checks { display: grid; gap: 12px; margin-top: 18px; }
+    .check { display: flex; align-items: center; gap: 10px; color: #334d5a; font-size: 14px; cursor: pointer; }
+    .check input { width: 17px; height: 17px; accent-color: var(--blue); }
+    .download { width: 100%; margin-top: 20px; }
+    .hint { margin: 10px 0 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
+    .status { display: flex; align-items: flex-start; gap: 10px; margin: 18px 0 24px; padding: 12px 14px; border-radius: 9px; background: #e6edf1; color: #3d5968; font-size: 13px; line-height: 1.55; }
+    .status::before { content: ""; flex: none; width: 8px; height: 8px; margin-top: 5px; border-radius: 50%; background: #81949d; }
+    .status[data-kind="working"] { background: #e5efff; color: #264e8a; }
+    .status[data-kind="working"]::before { background: var(--blue); }
+    .status[data-kind="done"] { background: #e1f1ec; color: #176454; }
+    .status[data-kind="done"]::before { background: #218b71; }
+    .status[data-kind="error"] { background: #f8e9e7; color: var(--red); }
+    .status[data-kind="error"]::before { background: var(--red); }
+    .results { margin-top: 18px; padding: 0; overflow: hidden; }
+    .results-head { display: flex; justify-content: space-between; align-items: baseline; gap: 14px; padding: 21px 23px 14px; }
+    .results-head h2 { margin: 0; font-size: 16px; }
+    .counts { display: flex; gap: 8px; color: var(--muted); font-size: 12px; }
+    .count { background: #edf3f5; border-radius: 5px; padding: 5px 8px; }
+    .table-head, .image-row { display: grid; grid-template-columns: 105px minmax(0, 1fr); align-items: center; gap: 12px; }
+    .table-head { padding: 9px 23px; background: #f6f8f9; color: #758790; font-size: 11px; font-weight: 700; }
+    .image-list { max-height: 330px; overflow: auto; }
+    .image-row { padding: 11px 23px; border-top: 1px solid #edf1f3; font-size: 12px; }
+    .category { justify-self: start; padding: 4px 7px; border-radius: 5px; color: #315875; background: #e7f0f6; font-weight: 700; }
+    .category.detail { color: #176f72; background: var(--aqua); }
+    .image-url { color: #667b86; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .empty { padding: 33px 23px 36px; color: #778a94; font-size: 13px; text-align: center; }
+    footer { margin-top: 17px; color: #74858d; font-size: 12px; }
+    @media (max-width: 760px) {
+      .shell { width: min(100% - 26px, 560px); padding-top: 22px; }
+      header { margin-bottom: 27px; }
+      .workspace { grid-template-columns: 1fr; }
+      .panel { padding: 19px; }
+      .results-head { padding: 19px 19px 13px; align-items: flex-start; flex-direction: column; }
+      .table-head, .image-row { padding-left: 19px; padding-right: 19px; }
+      .url-row { flex-direction: column; }
+      .url-row .button { width: 100%; }
+      .local-note { font-size: 0; }
+      .local-note::before { font-size: initial; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header>
+      <div class="brand">
+        <div class="mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7.5h3l1.4-2h7.2l1.4 2h3a1.5 1.5 0 0 1 1.5 1.5v9A1.5 1.5 0 0 1 20 19.5H4A1.5 1.5 0 0 1 2.5 18V9A1.5 1.5 0 0 1 4 7.5Z"/><circle cx="12" cy="13" r="3.5"/></svg>
+        </div>
+        <div><div class="brand-name">淘宝图片助手</div><div class="brand-caption">商品图下载与处理</div></div>
+      </div>
+      <div class="local-note">仅在本机处理</div>
+    </header>
+
+    <section class="intro" aria-labelledby="page-title">
+      <h1 id="page-title">整理商品图片</h1>
+      <p>打开商品页，扫描主图和详情图，再按需镜像并给人脸打马赛克。</p>
+    </section>
+
+    <section class="workspace" aria-label="商品图片处理">
+      <div class="panel">
+        <h2 class="section-title">商品页面</h2>
+        <label for="product-url">淘宝或天猫商品链接</label>
+        <div class="url-row">
+          <input id="product-url" type="url" placeholder="粘贴商品链接" autocomplete="url">
+          <button id="open-button" class="button" type="button">打开商品页</button>
+        </div>
+        <div class="actions">
+          <button id="scan-button" class="button secondary" type="button" disabled>扫描图片</button>
+        </div>
+        <p class="hint">如页面要求登录，请在弹出的浏览器窗口完成登录，再回来扫描。</p>
+      </div>
+
+      <div class="panel">
+        <h2 class="section-title">保存与处理</h2>
+        <div class="output">
+          <label for="output-dir">保存到电脑上的文件夹</label>
+          <input id="output-dir" type="text" spellcheck="false">
+        </div>
+        <div class="checks">
+          <label class="check"><input id="mirror" type="checkbox" checked> 图片左右镜像</label>
+          <label class="check"><input id="mosaic" type="checkbox" checked> 识别人脸并打马赛克</label>
+        </div>
+        <button id="download-button" class="button download" type="button" disabled>下载并处理图片</button>
+        <p class="hint">原图和处理结果会分别保存在“下载原图”和“处理后”文件夹。</p>
+      </div>
+    </section>
+
+    <div id="status" class="status" role="status" aria-live="polite" data-kind="idle">正在连接本机服务…</div>
+
+    <section class="panel results" aria-labelledby="results-title">
+      <div class="results-head">
+        <h2 id="results-title">扫描结果</h2>
+        <div class="counts"><span class="count">主图 <b id="main-count">0</b></span><span class="count">详情图 <b id="detail-count">0</b></span></div>
+      </div>
+      <div class="table-head"><span>类型</span><span>图片地址</span></div>
+      <div id="image-list" class="image-list"><div class="empty">扫描后，找到的图片会显示在这里。</div></div>
+    </section>
+    <footer>本地服务仅监听此电脑。下载图片和人脸处理均在本机完成。</footer>
+  </main>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const statusEl = $("status");
+    let lastSignature = "";
+    let outputInitialized = false;
+
+    async function post(path, data) {
+      const response = await fetch(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data)
+      });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error || "操作失败。");
+    }
+
+    function renderImages(images) {
+      const signature = images.map((item) => item.category + item.url).join("\n");
+      if (signature === lastSignature) return;
+      lastSignature = signature;
+      const list = $("image-list");
+      list.replaceChildren();
+      if (!images.length) {
+        const empty = document.createElement("div");
+        empty.className = "empty";
+        empty.textContent = "扫描后，找到的图片会显示在这里。";
+        list.append(empty);
+      }
+      let main = 0;
+      let detail = 0;
+      for (const item of images) {
+        if (item.category === "主图") main++;
+        else detail++;
+        const row = document.createElement("div");
+        row.className = "image-row";
+        const badge = document.createElement("span");
+        badge.className = "category" + (item.category === "详情图" ? " detail" : "");
+        badge.textContent = item.category;
+        const address = document.createElement("span");
+        address.className = "image-url";
+        address.textContent = item.url;
+        address.title = item.url;
+        row.append(badge, address);
+        list.append(row);
+      }
+      $("main-count").textContent = main;
+      $("detail-count").textContent = detail;
+    }
+
+    async function refresh() {
+      try {
+        const response = await fetch("/api/state", { cache: "no-store" });
+        const state = await response.json();
+        statusEl.textContent = state.status;
+        statusEl.dataset.kind = state.status_kind;
+        if (!outputInitialized) {
+          $("output-dir").value = state.output_dir;
+          outputInitialized = true;
+        }
+        renderImages(state.images);
+        $("open-button").disabled = state.busy;
+        $("scan-button").disabled = state.busy || !state.page_open;
+        $("download-button").disabled = state.busy || !state.images.length;
+      } catch (_error) {
+        statusEl.textContent = "本机服务已停止。重新运行 run_web.bat 即可连接。";
+        statusEl.dataset.kind = "error";
+      }
+    }
+
+    $("open-button").addEventListener("click", async () => {
+      try { await post("/api/open", { url: $("product-url").value }); }
+      catch (error) { statusEl.textContent = error.message; statusEl.dataset.kind = "error"; }
+      refresh();
+    });
+    $("scan-button").addEventListener("click", async () => {
+      try { await post("/api/scan", {}); }
+      catch (error) { statusEl.textContent = error.message; statusEl.dataset.kind = "error"; }
+      refresh();
+    });
+    $("download-button").addEventListener("click", async () => {
+      try {
+        await post("/api/download", {
+          output_dir: $("output-dir").value,
+          mirror: $("mirror").checked,
+          mosaic: $("mosaic").checked
+        });
+      } catch (error) { statusEl.textContent = error.message; statusEl.dataset.kind = "error"; }
+      refresh();
+    });
+    refresh();
+    setInterval(refresh, 650);
+  </script>
+</body>
+</html>
