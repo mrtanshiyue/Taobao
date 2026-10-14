@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import csv
+import json
 import mimetypes
 import queue
 import re
@@ -132,6 +133,81 @@ def taobao_login_present(context) -> bool:
 def require_taobao_login(context):
     if not taobao_login_present(context):
         raise RuntimeError("未检测到淘宝登录信息。请先在弹出的 Edge 商品页登录，再重新点击扫描或下载。")
+
+
+def export_page_structure(page) -> Path:
+    script = r"""() => {
+        const selectorGroups = {
+            mainGallery: ['#J_UlThumb', '.J_UlThumb', '.tb-thumb', '.tb-main-pic', '.tb-gallery',
+                '[class*="mainPic"]', '[class*="main-pic"]', '[class*="gallery"]'],
+            detail: ['#imageTextInfo-content', '.desc-root', '.descV8-container', '#description',
+                '#J_DivItemDesc', '[id*="description"]', '[id*="Description"]',
+                '[class*="desc-root"]', '[class*="descV8"]', '[class*="ItemDesc"]']
+        };
+        const describe = (element) => {
+            const rect = element.getBoundingClientRect();
+            const style = getComputedStyle(element);
+            return {
+                tag: element.tagName.toLowerCase(), id: element.id || "",
+                className: typeof element.className === "string" ? element.className.slice(0, 180) : "",
+                role: element.getAttribute("role") || "",
+                ariaLabel: element.getAttribute("aria-label") || "",
+                controls: element.getAttribute("aria-controls") || "",
+                targetId: (element.getAttribute("href") || "").startsWith("#")
+                    ? element.getAttribute("href").slice(1) : "",
+                imageCount: element.querySelectorAll("img").length,
+                visibleImageCount: Array.from(element.querySelectorAll("img")).filter((img) => {
+                    const r = img.getBoundingClientRect();
+                    return r.width > 0 && r.height > 0 && getComputedStyle(img).visibility !== "hidden";
+                }).length,
+                width: Math.round(rect.width), height: Math.round(rect.height),
+                display: style.display, visibility: style.visibility
+            };
+        };
+        const candidates = {};
+        for (const [group, selectors] of Object.entries(selectorGroups)) {
+            const seen = new Set();
+            candidates[group] = selectors.flatMap((selector) => {
+                try {
+                    return Array.from(document.querySelectorAll(selector)).filter((element) => {
+                        if (seen.has(element)) return false;
+                        seen.add(element);
+                        return true;
+                    }).map((element) => ({selector, ...describe(element)}));
+                } catch (_) { return []; }
+            }).slice(0, 80);
+        }
+        const labels = new Set(["商品详情", "宝贝详情", "图文详情", "商品参数", "主图"]);
+        const labelElements = Array.from(document.querySelectorAll("button,a,[role=tab],h1,h2,h3,h4"))
+            .filter((element) => labels.has((element.innerText || element.textContent || "").replace(/\s+/g, "").trim()))
+            .slice(0, 40).map((element) => ({label: (element.innerText || element.textContent || "").trim(), ...describe(element),
+                ancestors: Array.from((function* () { let node = element.parentElement; let n = 0; while (node && n++ < 5) { yield node; node = node.parentElement; } })()).map(describe)}));
+        const largestImages = Array.from(document.images).sort((a, b) =>
+            b.naturalWidth * b.naturalHeight - a.naturalWidth * a.naturalHeight).slice(0, 24).map((image) => {
+                const rect = image.getBoundingClientRect();
+                const ancestors = [];
+                let node = image.parentElement;
+                while (node && ancestors.length < 6) { ancestors.push(describe(node)); node = node.parentElement; }
+                return {naturalWidth: image.naturalWidth, naturalHeight: image.naturalHeight,
+                    width: Math.round(rect.width), height: Math.round(rect.height), ancestors};
+            });
+        return {host: location.hostname, frameCount: window.length, imageCount: document.images.length,
+            scrollHeight: document.documentElement.scrollHeight,
+            viewport: {width: innerWidth, height: innerHeight}, candidates, labelElements, largestImages};
+    }"""
+    frames = []
+    for index, frame in enumerate(page.frames):
+        try:
+            data = frame.evaluate(script)
+            data["frameIndex"] = index
+            frames.append(data)
+        except Exception as exc:
+            frames.append({"frameIndex": index, "error": type(exc).__name__})
+    folder = APP_DIR / "diagnostics"
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"page_structure_{datetime.now():%Y%m%d_%H%M%S}.json"
+    path.write_text(json.dumps({"frames": frames}, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
 
 
 def scan_product_page(page) -> tuple[list[ProductImage], str]:
@@ -375,6 +451,14 @@ class BrowserWorker(threading.Thread):
                             require_taobao_login(context)
                             images, warning = scan_product_page(page)
                             self.emit("scanned", (images, warning))
+                        elif kind == "diagnose":
+                            if not page:
+                                raise RuntimeError("请先打开商品链接。")
+                            require_taobao_login(context)
+                            if urllib.parse.urlparse(page.url).hostname == "login.taobao.com":
+                                raise RuntimeError("当前仍在淘宝登录页，请在 Edge 完成登录并确认商品页已打开。")
+                            path = export_page_structure(page)
+                            self.emit("diagnosed", str(path))
                         elif kind == "download":
                             if not context:
                                 raise RuntimeError("请先打开商品链接。")
@@ -477,10 +561,11 @@ class App:
         frame = ttk.Frame(self.root, padding=16)
         frame.pack(fill="both", expand=True)
         ttk.Label(frame, text="淘宝商品链接").grid(row=0, column=0, sticky="w")
-        ttk.Entry(frame, textvariable=self.url).grid(row=1, column=0, columnspan=3, sticky="ew", pady=(4, 12))
+        ttk.Entry(frame, textvariable=self.url).grid(row=1, column=0, columnspan=4, sticky="ew", pady=(4, 12))
         ttk.Button(frame, text="打开商品页", command=self.open_page).grid(row=2, column=0, sticky="w")
         ttk.Button(frame, text="扫描图片", command=self.scan).grid(row=2, column=1, sticky="w", padx=8)
         ttk.Button(frame, text="下载并处理", command=self.download).grid(row=2, column=2, sticky="w")
+        ttk.Button(frame, text="导出页面诊断", command=self.diagnose).grid(row=2, column=3, sticky="e", padx=(8, 0))
         ttk.Label(frame, text="保存位置").grid(row=3, column=0, sticky="w", pady=(16, 0))
         ttk.Entry(frame, textvariable=self.output_dir).grid(row=4, column=0, columnspan=2, sticky="ew", pady=4)
         ttk.Button(frame, text="选择…", command=self.choose_folder).grid(row=4, column=2, sticky="e")
@@ -524,6 +609,10 @@ class App:
         self.status.set("正在扫描页面，请稍候…")
         self.worker.commands.put(("scan",))
 
+    def diagnose(self):
+        self.status.set("正在导出页面结构（不包含 Cookie 和图片地址）…")
+        self.worker.commands.put(("diagnose",))
+
     def download(self):
         if not self.images:
             messagebox.showinfo("还没有图片", "请先打开商品页并扫描图片。")
@@ -560,6 +649,11 @@ class App:
                     messagebox.showinfo(
                         "下载完成",
                         f"已保存到：\n{folder}\n\n成功 {ok} 张，失败 {failed} 张。{details}",
+                    )
+                elif kind == "diagnosed":
+                    messagebox.showinfo(
+                        "诊断已导出",
+                        f"诊断文件已保存到：\n{value}\n\n文件不包含 Cookie、商品标题或图片地址。请把 JSON 文件发给开发者。",
                     )
                 elif kind == "error":
                     self.status.set(value)
