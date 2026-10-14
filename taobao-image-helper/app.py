@@ -151,7 +151,6 @@ def export_page_structure(page) -> Path:
                 tag: element.tagName.toLowerCase(), id: element.id || "",
                 className: typeof element.className === "string" ? element.className.slice(0, 180) : "",
                 role: element.getAttribute("role") || "",
-                ariaLabel: element.getAttribute("aria-label") || "",
                 controls: element.getAttribute("aria-controls") || "",
                 targetId: (element.getAttribute("href") || "").startsWith("#")
                     ? element.getAttribute("href").slice(1) : "",
