@@ -1,5 +1,6 @@
 import unittest
 from io import BytesIO
+from threading import Lock
 from unittest.mock import patch
 
 import numpy as np
@@ -17,6 +18,7 @@ from app import (
     product_title,
     valid_product_url,
 )
+from web_app import LocalApp
 
 
 class ProductUrlTests(unittest.TestCase):
@@ -165,6 +167,19 @@ class ProductFolderTests(unittest.TestCase):
             second = create_product_folder(root, "商品标题")
             self.assertEqual(second.name, "商品标题 (2)")
             self.assertEqual((first / "keep.txt").read_text(encoding="utf-8"), "保留")
+
+
+class LocalAppStatusTests(unittest.TestCase):
+    def test_request_errors_remain_visible_in_state(self):
+        app = LocalApp.__new__(LocalApp)
+        app.lock = Lock()
+        app.status = "旧状态"
+        app.status_kind = "ready"
+
+        app.set_request_error("商品链接无效")
+
+        self.assertEqual(app.status, "商品链接无效")
+        self.assertEqual(app.status_kind, "error")
 
 
 if __name__ == "__main__":

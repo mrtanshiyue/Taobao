@@ -97,6 +97,11 @@ class LocalApp:
                 "result": self.result,
             }
 
+    def set_request_error(self, message):
+        with self.lock:
+            self.status = message
+            self.status_kind = "error"
+
     def command(self, command, *args):
         with self.lock:
             if self.busy:
@@ -235,6 +240,7 @@ def serve():
                     return
                 self.send_json({"message": message}, 202)
             except (ValueError, json.JSONDecodeError, UnicodeError, OSError) as exc:
+                app.set_request_error(str(exc))
                 self.send_json({"error": str(exc)}, 400)
 
     class LocalServer(ThreadingHTTPServer):
