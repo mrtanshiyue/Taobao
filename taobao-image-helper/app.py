@@ -235,7 +235,7 @@ class BrowserWorker(threading.Thread):
                         elif kind == "download":
                             if not context:
                                 raise RuntimeError("请先打开商品链接。")
-                            self.download(context, *command[1:])
+                            self.download(context, page.url, *command[1:])
                     except Exception as exc:
                         self.emit("error", str(exc))
         except Exception as exc:
@@ -248,7 +248,7 @@ class BrowserWorker(threading.Thread):
                     pass
             self.emit("stopped")
 
-    def download(self, context, images, output_dir: Path, mirror: bool, mosaic: bool):
+    def download(self, context, referer: str, images, output_dir: Path, mirror: bool, mosaic: bool):
         output_dir.mkdir(parents=True, exist_ok=True)
         run_dir = Path(tempfile.mkdtemp(prefix=f"{datetime.now():%Y%m%d_%H%M%S}_", dir=output_dir))
         originals = run_dir / "下载原图"
@@ -257,10 +257,13 @@ class BrowserWorker(threading.Thread):
         if mirror or mosaic:
             processed.mkdir(parents=True, exist_ok=True)
         ok = failed = face_total = 0
+        failure_details = []
         counts = {"主图": 0, "详情图": 0}
         for index, item in enumerate(images, 1):
             try:
-                response = context.request.get(item.url, timeout=30000)
+                response = context.request.get(
+                    item.url, timeout=30000, headers={"Referer": referer}
+                )
                 if not response.ok:
                     raise RuntimeError(f"HTTP {response.status}")
                 data = response.body()
@@ -280,10 +283,24 @@ class BrowserWorker(threading.Thread):
                 ok += 1
             except Exception as exc:
                 failed += 1
+                failure_details.append(
+                    f"{index}\t{item.category}\t{item.url}\t{type(exc).__name__}: {exc}"
+                )
                 self.emit("progress", f"{index}/{len(images)}：跳过一张（{exc}）")
                 continue
             self.emit("progress", f"已处理 {index}/{len(images)} 张，识别到 {face_total} 张脸")
-        self.emit("complete", (ok, failed, face_total, str(run_dir)))
+        failure_log = ""
+        if failure_details:
+            failure_path = run_dir / "下载失败记录.txt"
+            try:
+                failure_path.write_text(
+                    "序号\t类型\t图片地址\t失败原因\n" + "\n".join(failure_details),
+                    encoding="utf-8",
+                )
+                failure_log = str(failure_path)
+            except OSError as exc:
+                self.emit("progress", f"无法保存失败详情：{exc}")
+        self.emit("complete", (ok, failed, face_total, str(run_dir), failure_log))
 
 
 class App:
@@ -384,9 +401,13 @@ class App:
                 elif kind == "progress":
                     self.status.set(value)
                 elif kind == "complete":
-                    ok, failed, faces, folder = value
+                    ok, failed, faces, folder, failure_log = value
                     self.status.set(f"完成：成功 {ok} 张，失败 {failed} 张，马赛克处理 {faces} 张脸。")
-                    messagebox.showinfo("下载完成", f"已保存到：\n{folder}\n\n成功 {ok} 张，失败 {failed} 张。")
+                    details = f"\n失败详情：\n{failure_log}" if failure_log else ""
+                    messagebox.showinfo(
+                        "下载完成",
+                        f"已保存到：\n{folder}\n\n成功 {ok} 张，失败 {failed} 张。{details}",
+                    )
                 elif kind == "error":
                     self.status.set(value)
                     messagebox.showerror("操作失败", value)
