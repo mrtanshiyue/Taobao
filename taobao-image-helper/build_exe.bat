@@ -6,7 +6,7 @@ if not exist .venv\Scripts\python.exe exit /b 1
 set "PLAYWRIGHT_BROWSERS_PATH=%LOCALAPPDATA%\ms-playwright"
 .venv\Scripts\python.exe -m pip install pyinstaller
 if errorlevel 1 goto failed
-.venv\Scripts\python.exe -m playwright install chromium
+.venv\Scripts\python.exe -m playwright install chromium --no-shell
 if errorlevel 1 goto failed
 
 if exist build rmdir /s /q build
