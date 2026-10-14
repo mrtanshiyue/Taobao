@@ -7,6 +7,8 @@ if not exist .venv\Scripts\python.exe exit /b 1
 if errorlevel 1 goto failed
 .venv\Scripts\python.exe -m pip install pyinstaller
 if errorlevel 1 goto failed
+.venv\Scripts\python.exe -c "import cv2; assert hasattr(cv2, 'CascadeClassifier') and not cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml').empty(), 'OpenCV face cascade is unavailable'"
+if errorlevel 1 goto failed
 
 if exist build rmdir /s /q build
 if exist dist rmdir /s /q dist
