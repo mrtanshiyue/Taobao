@@ -297,9 +297,10 @@ def _face_cascades():
 
 
 def face_boxes(rgb: np.ndarray) -> list[tuple[int, int, int, int]]:
-    # shortcut: Haar cascades can still miss occluded faces; use a trained detector for higher recall.
+    # shortcut: stricter Haar settings reduce hand/clothing false positives but can miss smaller faces.
     gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
     cascades = _face_cascades()
+    min_face_size = max(36, min(gray.shape) // 32)
     boxes: list[tuple[int, int, int, int]] = []
     for cascade_index, cascade in enumerate(cascades):
         if cascade.empty():
@@ -309,7 +310,7 @@ def face_boxes(rgb: np.ndarray) -> list[tuple[int, int, int, int]]:
             variants.append((cv2.flip(gray, 1), True))
         for variant, flipped in variants:
             for x, y, w, h in cascade.detectMultiScale(
-                variant, scaleFactor=1.05, minNeighbors=4, minSize=(24, 24)
+                variant, scaleFactor=1.1, minNeighbors=6, minSize=(min_face_size, min_face_size)
             ):
                 boxes.append((gray.shape[1] - x - w if flipped else x, y, w, h))
 
