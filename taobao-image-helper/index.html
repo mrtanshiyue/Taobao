@@ -164,7 +164,7 @@
     let outputInitialized = false;
 
     function productLinks() {
-      return $("product-url").value.split(/[\r\n,，;；]+/).map((value) => value.trim()).filter(Boolean);
+      return $("product-url").value.split(/\r?\n+/).map((value) => value.trim()).filter(Boolean);
     }
 
     function normalizedUrl(value) {

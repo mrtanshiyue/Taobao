@@ -67,7 +67,7 @@ def valid_product_url(value: str) -> str:
 
 
 def parse_product_urls(value: str) -> list[str]:
-    urls = [part.strip() for part in re.split(r"[\r\n,，;；]+", value or "") if part.strip()]
+    urls = [part.strip() for part in (value or "").splitlines() if part.strip()]
     if not urls:
         raise ValueError("请至少粘贴一个淘宝商品链接，每行一个。")
     return [valid_product_url(url) for url in urls]
@@ -854,7 +854,7 @@ class App:
         frame = ttk.Frame(window, padding=18)
         frame.pack(fill="both", expand=True)
         ttk.Label(frame, text="粘贴淘宝或天猫商品链接", font=("TkDefaultFont", 12, "bold")).pack(anchor="w")
-        ttk.Label(frame, text="每行一个链接，也可用逗号或分号分隔。程序会依次扫描主图和详情图，并按商品标题建文件夹。", wraplength=590).pack(anchor="w", pady=(5, 12))
+        ttk.Label(frame, text="每行粘贴一个链接。程序会依次扫描主图和详情图，并按商品标题建文件夹。", wraplength=590).pack(anchor="w", pady=(5, 12))
         input_area = ttk.Frame(frame)
         input_area.pack(fill="both", expand=True)
         editor = Text(input_area, height=13, wrap="word", undo=True)

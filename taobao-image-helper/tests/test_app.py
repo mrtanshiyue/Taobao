@@ -35,11 +35,11 @@ class ProductUrlTests(unittest.TestCase):
 
     def test_parses_and_validates_multiple_links(self):
         self.assertEqual(
-            parse_product_urls("item.taobao.com/item.htm?id=1\nhttps://detail.tmall.com/item.htm?id=2;"),
+            parse_product_urls("item.taobao.com/item.htm?id=1\nhttps://detail.tmall.com/item.htm?id=2"),
             ["https://item.taobao.com/item.htm?id=1", "https://detail.tmall.com/item.htm?id=2"],
         )
         with self.assertRaises(ValueError):
-            parse_product_urls("https://item.taobao.com/item.htm?id=1, https://example.com/")
+            parse_product_urls("https://item.taobao.com/item.htm?id=1\nhttps://example.com/")
 
 
 class ImageHelpersTests(unittest.TestCase):
