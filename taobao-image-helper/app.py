@@ -5,6 +5,7 @@ import csv
 import json
 import queue
 import re
+import sys
 import threading
 import urllib.parse
 from dataclasses import dataclass
@@ -287,43 +288,38 @@ def scan_product_page(page) -> tuple[list[ProductImage], str]:
     return [image for image, _score in found.values()], "；".join(warnings)
 
 
+def _resource_path(relative_path: str) -> Path:
+    return Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent)) / relative_path
+
+
 @lru_cache(maxsize=1)
-def _face_cascades():
-    return (
-        cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml"),
-        cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_profileface.xml"),
+def _face_detector():
+    return cv2.FaceDetectorYN.create(
+        str(_resource_path("models/face_detection_yunet_2023mar.onnx")),
+        "",
+        (320, 320),
+        score_threshold=0.6,
+        nms_threshold=0.3,
+        top_k=5000,
     )
 
 
 def face_boxes(rgb: np.ndarray) -> list[tuple[int, int, int, int]]:
-    # shortcut: stricter Haar settings reduce hand/clothing false positives but can miss smaller faces.
-    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
-    cascades = _face_cascades()
-    min_face_size = max(36, min(gray.shape) // 32)
-    boxes: list[tuple[int, int, int, int]] = []
-    for cascade_index, cascade in enumerate(cascades):
-        if cascade.empty():
-            continue
-        variants = [(gray, False)]
-        if cascade_index == 1:
-            variants.append((cv2.flip(gray, 1), True))
-        for variant, flipped in variants:
-            for x, y, w, h in cascade.detectMultiScale(
-                variant, scaleFactor=1.1, minNeighbors=6, minSize=(min_face_size, min_face_size)
-            ):
-                boxes.append((gray.shape[1] - x - w if flipped else x, y, w, h))
-
-    # Remove overlapping detections from frontal/profile cascades.
-    result: list[tuple[int, int, int, int]] = []
-    for box in sorted(boxes, key=lambda item: item[2] * item[3], reverse=True):
-        x, y, w, h = box
-        if all(
-            (max(0, min(x + w, xx + ww) - max(x, xx)) * max(0, min(y + h, yy + hh) - max(y, yy)))
-            / max(1, w * h + ww * hh - max(0, min(x + w, xx + ww) - max(x, xx)) * max(0, min(y + h, yy + hh) - max(y, yy))) < 0.45
-            for xx, yy, ww, hh in result
-        ):
-            result.append(box)
-    return result
+    # shortcut: YuNet can miss tiny or occluded faces; review those images manually.
+    image = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+    detector = _face_detector()
+    detector.setInputSize((image.shape[1], image.shape[0]))
+    _status, detections = detector.detect(image)
+    if detections is None:
+        return []
+    height, width = image.shape[:2]
+    boxes = []
+    for x, y, w, h in detections[:, :4]:
+        left, top = max(0, int(x)), max(0, int(y))
+        right, bottom = min(width, int(x + w)), min(height, int(y + h))
+        if right > left and bottom > top:
+            boxes.append((left, top, right - left, bottom - top))
+    return boxes
 
 
 def _encode_portable_image(image: Image.Image, preserve_png: bool) -> tuple[bytes, str]:
@@ -351,9 +347,12 @@ def process_image(data: bytes, mirror: bool, mosaic: bool) -> tuple[bytes, str, 
     if mosaic:
         rgb = np.asarray(image.convert("RGB"))
         for x, y, w, h in face_boxes(rgb):
-            crop = image.crop((x, y, x + w, y + h))
-            small = crop.resize((max(1, w // 12), max(1, h // 12)), Image.Resampling.BILINEAR)
-            image.paste(small.resize((w, h), Image.Resampling.NEAREST), (x, y))
+            pad_x, pad_y = max(4, round(w * 0.15)), max(4, round(h * 0.15))
+            left, top = max(0, x - pad_x), max(0, y - pad_y)
+            right, bottom = min(image.width, x + w + pad_x), min(image.height, y + h + pad_y)
+            crop = image.crop((left, top, right, bottom))
+            small = crop.resize((max(1, crop.width // 48), max(1, crop.height // 48)), Image.Resampling.BILINEAR)
+            image.paste(small.resize(crop.size, Image.Resampling.NEAREST), (left, top))
             faces += 1
     if mirror:
         image = ImageOps.mirror(image)

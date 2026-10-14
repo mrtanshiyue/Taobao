@@ -6,7 +6,7 @@ import numpy as np
 from PIL import Image
 
 from app import (
-    _face_cascades,
+    _face_detector,
     canonical_image_url,
     create_product_folder,
     face_boxes,
@@ -57,35 +57,49 @@ class ImageHelpersTests(unittest.TestCase):
         second = "https://img.alicdn.com/item.jpg_800x800q90.jpg_.webp?token=b"
         self.assertEqual(canonical_image_url(first), canonical_image_url(second))
 
-    def test_face_cascade_files_load_and_are_reused(self):
-        cascades = _face_cascades()
-        frontal, profile = cascades
-        self.assertFalse(frontal.empty())
-        self.assertFalse(profile.empty())
-        self.assertIs(_face_cascades(), cascades)
+    def test_yunet_model_loads_and_detector_is_reused(self):
+        detector = _face_detector()
+        self.assertIsNotNone(detector)
+        self.assertIs(_face_detector(), detector)
 
-    def test_face_detection_uses_stricter_settings(self):
-        class FakeCascade:
+    def test_face_detection_uses_yunet_and_clips_boxes_to_image(self):
+        class FakeDetector:
             def __init__(self):
-                self.calls = []
+                self.input_size = None
+                self.image = None
 
-            def empty(self):
-                return False
+            def setInputSize(self, size):
+                self.input_size = size
 
-            def detectMultiScale(self, _image, **kwargs):
-                self.calls.append(kwargs)
-                return ()
+            def detect(self, image):
+                self.image = image
+                return 1, np.array([[-5, 10, 30, 40, 0.9]], dtype=np.float32)
 
-        frontal, profile = FakeCascade(), FakeCascade()
-        with patch("app._face_cascades", return_value=(frontal, profile)):
-            self.assertEqual(face_boxes(np.zeros((1200, 1600, 3), dtype=np.uint8)), [])
+        detector = FakeDetector()
+        rgb = np.zeros((80, 100, 3), dtype=np.uint8)
+        rgb[:, :, 0] = 255
+        with patch("app._face_detector", return_value=detector):
+            self.assertEqual(face_boxes(rgb), [(0, 10, 25, 40)])
 
-        calls = frontal.calls + profile.calls
-        self.assertEqual(len(calls), 3)
-        for kwargs in calls:
-            self.assertEqual(kwargs["scaleFactor"], 1.1)
-            self.assertEqual(kwargs["minNeighbors"], 6)
-            self.assertEqual(kwargs["minSize"], (37, 37))
+        self.assertEqual(detector.input_size, (100, 80))
+        self.assertEqual(detector.image[0, 0].tolist(), [0, 0, 255])
+
+    def test_mosaic_uses_large_blocks_and_expands_face_area(self):
+        source = Image.new("RGB", (120, 120))
+        pixels = source.load()
+        for y in range(120):
+            for x in range(120):
+                value = 255 if (x + y) % 2 else 0
+                pixels[x, y] = (value, value, value)
+        data = BytesIO()
+        source.save(data, format="PNG")
+
+        with patch("app.face_boxes", return_value=[(20, 20, 80, 80)]):
+            processed, _extension, faces = process_image(data.getvalue(), mirror=False, mosaic=True)
+
+        result = np.asarray(Image.open(BytesIO(processed)))
+        self.assertEqual(faces, 1)
+        self.assertTrue(np.all(result[8:60, 8:60] == result[8, 8]))
 
     def test_mirror_preserves_png_and_flips_pixels(self):
         source = Image.new("RGB", (2, 1))
