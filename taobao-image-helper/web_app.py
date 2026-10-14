@@ -49,11 +49,19 @@ class LocalApp:
                     self.status = value
                     self.status_kind = "working"
                 elif kind == "complete":
-                    ok, failed, faces, folder = value
+                    ok, failed, faces, folder, failure_log = value
                     self.busy = False
                     self.status = f"下载完成：成功 {ok} 张，失败 {failed} 张，马赛克处理 {faces} 张脸。"
+                    if failure_log:
+                        self.status += f" 失败详情：{failure_log}"
                     self.status_kind = "done"
-                    self.result = {"ok": ok, "failed": failed, "faces": faces, "folder": folder}
+                    self.result = {
+                        "ok": ok,
+                        "failed": failed,
+                        "faces": faces,
+                        "folder": folder,
+                        "failure_log": failure_log,
+                    }
                 elif kind == "error":
                     self.busy = False
                     self.status = value
