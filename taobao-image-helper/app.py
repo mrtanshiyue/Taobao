@@ -28,9 +28,13 @@ except ImportError as exc:
 APP_DIR = Path.home() / ".taobao_image_helper"
 IMAGE_HOSTS = ("alicdn.com", "tbcdn.cn", "taobao.com", "taobaocdn.com")
 PRODUCT_HOSTS = ("taobao.com", "tmall.com", "tmall.hk", "tb.cn")
-RELATED_SECTION_MARKERS = (
-    "猜你喜欢", "店铺推荐", "宝贝推荐", "商品推荐", "热销推荐", "相关推荐",
-    "看了又看", "为你推荐", "同类商品", "相似商品", "大家都在看", "掌柜推荐",
+MAIN_IMAGE_CONTAINERS = (
+    "#picGalleryEle", "#tb-gallery", ".tb-gallery", "#J_UlThumb", ".J_UlThumb",
+    ".tb-thumb", "#mainPicImageEl",
+)
+DETAIL_IMAGE_CONTAINERS = (
+    "#imageTextInfo-content", "#J_DivItemDesc", "#description",
+    ".descV8-container", ".desc-root",
 )
 
 
@@ -86,44 +90,6 @@ def canonical_image_url(value: str) -> str:
     return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
 
 
-def find_related_boundary(page, detail_boundary: int) -> float | None:
-    boundary = None
-    for frame in page.frames:
-        try:
-            if frame == page.main_frame:
-                frame_offset = 0
-            else:
-                frame_box = frame.frame_element().bounding_box()
-                if not frame_box:
-                    continue
-                frame_offset = frame_box["y"] + page.evaluate("window.scrollY")
-            local_y = frame.evaluate(
-                """({markers, minimum}) => {
-                    const selectors = 'h1,h2,h3,h4,[class*="title"],[class*="Title"],'
-                        + '[class*="recommend"],[class*="Recommend"],[id*="recommend"],[id*="Recommend"]';
-                    const positions = Array.from(document.querySelectorAll(selectors)).flatMap((element) => {
-                        const text = (element.innerText || element.textContent || "").replace(/\\s+/g, "").trim();
-                        const rect = element.getBoundingClientRect();
-                        const y = rect.top + window.scrollY;
-                        return text.length <= 32 && rect.width > 20 && rect.height > 8 && y > minimum
-                            && markers.some((marker) => text.includes(marker)) ? [y] : [];
-                    });
-                    return positions.length ? Math.min(...positions) : null;
-                }""",
-                {
-                    "markers": list(RELATED_SECTION_MARKERS),
-                    "minimum": detail_boundary + 300 - frame_offset,
-                },
-            )
-            if local_y is None:
-                continue
-            absolute_y = local_y + frame_offset
-            boundary = absolute_y if boundary is None else min(boundary, absolute_y)
-        except Exception:
-            continue
-    return boundary
-
-
 def taobao_login_present(context) -> bool:
     cookies = context.cookies(["https://www.taobao.com", "https://item.taobao.com"])
     names = {cookie["name"] for cookie in cookies if cookie.get("value")}
@@ -138,7 +104,7 @@ def require_taobao_login(context):
 def export_page_structure(page) -> Path:
     script = r"""() => {
         const selectorGroups = {
-            mainGallery: ['#J_UlThumb', '.J_UlThumb', '.tb-thumb', '.tb-main-pic', '.tb-gallery',
+            mainGallery: ['#picGalleryEle', '#J_UlThumb', '.J_UlThumb', '.tb-thumb', '.tb-main-pic', '.tb-gallery',
                 '[class*="mainPic"]', '[class*="main-pic"]', '[class*="gallery"]'],
             detail: ['#imageTextInfo-content', '.desc-root', '.descV8-container', '#description',
                 '#J_DivItemDesc', '[id*="description"]', '[id*="Description"]',
@@ -210,138 +176,72 @@ def export_page_structure(page) -> Path:
 
 
 def scan_product_page(page) -> tuple[list[ProductImage], str]:
-    detail_boundary = 1600
-    detail_tab_found = False
-    try:
-        detail_tab = page.get_by_text("商品详情", exact=True).first
-        box = detail_tab.bounding_box()
-        if box:
-            detail_boundary = box["y"] + page.evaluate("window.scrollY")
-            detail_tab_found = True
-        detail_tab.click(timeout=1200)
-        page.wait_for_timeout(350)
-    except Exception:
-        pass
+    read_images = """roots => {
+        const images = roots.flatMap(root => root.matches("img") ? [root] : [...root.querySelectorAll("img")]);
+        return images.map(img => ({
+            urls: [img.currentSrc, img.src, img.getAttribute("data-src"),
+                img.getAttribute("data-ks-lazyload"), img.getAttribute("data-lazyload"),
+                img.getAttribute("data-original"), img.getAttribute("data-lazy-src")],
+            width: img.naturalWidth || img.width,
+            height: img.naturalHeight || img.height,
+            y: img.getBoundingClientRect().top + window.scrollY
+        }));
+    }"""
 
-    page.evaluate("window.scrollTo(0, 0)")
-    page.wait_for_timeout(300)
-    gallery_anchor = page.evaluate(
-        """(detailBoundary) => Array.from(document.images).flatMap((image) => {
-            const rect = image.getBoundingClientRect();
-            const width = rect.width;
-            const height = rect.height;
-            const y = rect.top + window.scrollY;
-            const ratio = width / Math.max(1, height);
-            return width >= 150 && height >= 150 && width * height >= 30000
-                && ratio >= 0.65 && ratio <= 1.55 && y < detailBoundary
-                && rect.left < window.innerWidth * 0.7
-                ? [{left: rect.left + window.scrollX, top: y, right: rect.right + window.scrollX,
-                    bottom: rect.bottom + window.scrollY, width, height}]
-                : [];
-        }).sort((a, b) => b.width * b.height - a.width * a.height)[0] || null""",
-        detail_boundary,
-    )
-    gallery_area = None
-    if gallery_anchor:
-        gallery_area = {
-            "left": max(0, gallery_anchor["left"] - max(120, gallery_anchor["width"] * 0.35)),
-            "right": gallery_anchor["right"] + max(40, gallery_anchor["width"] * 0.15),
-            "top": max(0, gallery_anchor["top"] - 120),
-            "bottom": min(detail_boundary, gallery_anchor["bottom"] + 250),
-        }
-        detail_area = {
-            "left": max(0, gallery_anchor["left"] - 150),
-            "right": gallery_anchor["right"] + gallery_anchor["width"] * 0.75,
-        }
-    else:
-        detail_area = None
-    related_boundary = find_related_boundary(page, detail_boundary)
-    detail_scan_limit = 30000
-    max_scroll = int(min(120000, related_boundary or detail_boundary + detail_scan_limit))
-    found: dict[str, tuple[ProductImage, int]] = {}
-    truncated = False
-    frame_read_failed = False
-    for position in range(0, max_scroll + 1, 750):
-        page.evaluate("(position) => window.scrollTo(0, position)", position)
-        page.wait_for_timeout(300)
+    def find_container(selectors):
         for frame in page.frames:
-            try:
-                frame_box = frame.frame_element().bounding_box() if frame != page.main_frame else None
-                frame_offset_x = frame_box["x"] if frame_box else 0
-                frame_offset_y = (frame_box["y"] + page.evaluate("window.scrollY")) if frame_box else 0
-                images = frame.evaluate("""() => Array.from(document.images).map(img => ({
-                    urls: [img.currentSrc, img.src, img.getAttribute('data-src'),
-                           img.getAttribute('data-ks-lazyload'), img.getAttribute('data-lazyload'),
-                           img.getAttribute('data-original'), img.getAttribute('data-lazy-src')],
-                    naturalWidth: img.naturalWidth || img.width,
-                    naturalHeight: img.naturalHeight || img.height,
-                    x: img.getBoundingClientRect().left,
-                    y: img.getBoundingClientRect().top + window.scrollY,
-                    width: img.getBoundingClientRect().width,
-                    height: img.getBoundingClientRect().height
-                }))""")
-                for item in images:
-                    if item["naturalWidth"] < 60 or item["naturalHeight"] < 60 or item["width"] <= 0 or item["height"] <= 0:
-                        continue
-                    for candidate in item["urls"]:
-                        url = image_url(candidate)
-                        if url:
-                            absolute_x = item["x"] + frame_offset_x
-                            absolute_y = item["y"] + frame_offset_y
-                            if absolute_y < detail_boundary:
-                                if gallery_area:
-                                    if not (
-                                        gallery_area["left"] <= absolute_x <= gallery_area["right"]
-                                        and gallery_area["top"] <= absolute_y <= gallery_area["bottom"]
-                                    ):
-                                        break
-                                elif absolute_x > page.evaluate("window.innerWidth * 0.65"):
-                                    break
-                                category = "主图"
-                            else:
-                                if related_boundary and absolute_y >= related_boundary:
-                                    break
-                                if not related_boundary and absolute_y > detail_boundary + detail_scan_limit:
-                                    break
-                                if detail_area and not detail_area["left"] <= absolute_x <= detail_area["right"]:
-                                    break
-                                if item["width"] < 240 or item["height"] < 60:
-                                    break
-                                category = "详情图"
-                            key = canonical_image_url(url)
-                            score = item["naturalWidth"] * item["naturalHeight"]
-                            current = found.get(key)
-                            if current is None or score > current[1]:
-                                if current and current[0].category == "主图":
-                                    category = "主图"
-                                found[key] = (ProductImage(url, category), score)
-                            break
-            except Exception:
-                frame_read_failed = True
-                continue
+            for selector in selectors:
+                try:
+                    images = frame.locator(selector).evaluate_all(read_images)
+                except Exception:
+                    continue
+                if images:
+                    return frame, selector, images
+        return None, None, []
 
-        height = page.evaluate("Math.max(document.body.scrollHeight, document.documentElement.scrollHeight)")
-        if related_boundary and position >= related_boundary:
-            break
-        if not related_boundary and position >= detail_boundary + detail_scan_limit:
-            truncated = True
-            break
-        if position >= height - 800:
-            break
-    else:
-        truncated = related_boundary is None or related_boundary > 120000
-    page.evaluate("window.scrollTo(0, 0)")
+    groups = {
+        "主图": find_container(MAIN_IMAGE_CONTAINERS),
+        "详情图": find_container(DETAIL_IMAGE_CONTAINERS),
+    }
+    found: dict[str, tuple[ProductImage, int]] = {}
+    read_failed = False
+    for category, (frame, selector, images) in groups.items():
+        if not frame:
+            continue
+        try:
+            bottom = max((int(image["y"]) for image in images), default=0)
+            for position in range(0, bottom + 1, 1000):
+                frame.evaluate("position => window.scrollTo(0, position)", position)
+                page.wait_for_timeout(100)
+            images = frame.locator(selector).evaluate_all(read_images)
+            frame.evaluate("window.scrollTo(0, 0)")
+        except Exception:
+            read_failed = True
+            continue
+
+        for item in images:
+            if 0 < item["width"] < 60 or 0 < item["height"] < 60:
+                continue
+            for candidate in item["urls"]:
+                url = image_url(candidate)
+                if not url:
+                    continue
+                key = canonical_image_url(url)
+                score = item["width"] * item["height"]
+                current = found.get(key)
+                if current and current[0].category == "主图" and category == "详情图":
+                    break
+                if current is None or category == "主图" or score > current[1]:
+                    found[key] = (ProductImage(url, category), score)
+                break
+
     warnings = []
-    if truncated:
-        warnings.append("详情区域达到扫描上限，可能还有图片未找到")
-    if related_boundary is None:
-        warnings.append("未识别到推荐区分界，已限制详情图扫描长度")
-    if not gallery_anchor:
-        warnings.append("未定位到主图画廊，主图按商品信息区域筛选")
-    if frame_read_failed:
-        warnings.append("部分页面区域无法读取，结果可能不完整")
-    if not detail_tab_found:
-        warnings.append("未定位到商品详情分界线，图片分类为估算，可手动修正")
+    if not groups["主图"][0]:
+        warnings.append("未识别到主图画廊，主图未扫描")
+    if not groups["详情图"][0]:
+        warnings.append("未识别到详情图容器，详情图未扫描")
+    if read_failed:
+        warnings.append("部分图片区域读取失败，结果可能不完整")
     return [image for image, _score in found.values()], "；".join(warnings)
 
 
