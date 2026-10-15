@@ -184,13 +184,16 @@ class LocalApp:
                 self.current_url = ""
             self.busy = True
             self.status_kind = "working"
-            self.status = {
-                "open": "正在打开商品页…",
-                "scan": "正在扫描页面图片…",
-                "diagnose": "正在导出页面诊断…",
-                "download": "正在下载和处理图片…",
-                "batch": f"正在批量处理 {len(args[0])} 个商品…",
-            }.get(command, "正在处理…")
+            self.status = (
+                f"正在批量处理 {len(args[0])} 个商品…"
+                if command == "batch"
+                else {
+                    "open": "正在打开商品页…",
+                    "scan": "正在扫描页面图片…",
+                    "diagnose": "正在导出页面诊断…",
+                    "download": "正在下载和处理图片…",
+                }.get(command, "正在处理…")
+            )
             self.result = None
             self.worker = self.worker.submit((command, *args))
 
