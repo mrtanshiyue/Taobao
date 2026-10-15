@@ -318,6 +318,30 @@ class ProductFolderTests(unittest.TestCase):
 
 
 class LocalAppStatusTests(unittest.TestCase):
+    def test_commands_without_batch_arguments_set_status(self):
+        class FakeWorker:
+            def submit(self, task):
+                self.task = task
+                return self
+
+        app = LocalApp.__new__(LocalApp)
+        app.lock = Lock()
+        app.worker = FakeWorker()
+        app.busy = False
+        app.images = []
+        app.page_open = True
+        app.current_url = "https://item.taobao.com/item.htm?id=1"
+
+        for command, expected in (
+            ("scan", "正在扫描页面图片…"),
+            ("diagnose", "正在导出页面诊断…"),
+        ):
+            with self.subTest(command=command):
+                app.busy = False
+                app.command(command)
+                self.assertEqual(app.status, expected)
+                self.assertEqual(app.worker.task, (command,))
+
     def test_local_api_rejects_remote_hosts_and_cross_origin_posts(self):
         self.assertTrue(local_request_allowed("127.0.0.1", "127.0.0.1:4321", "http://127.0.0.1:4321", True))
         self.assertTrue(local_request_allowed("127.0.0.1", "localhost:4321", None, True))
