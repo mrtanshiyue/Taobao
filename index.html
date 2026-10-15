@@ -182,7 +182,7 @@
           <label class="check"><input id="mosaic" type="checkbox" checked> 识别人脸并打马赛克</label>
         </div>
         <button id="download-button" class="button download" type="button" disabled>下载并处理图片</button>
-        <p id="output-hint" class="hint">每个商品按商品标题建文件夹；原图和处理结果分别放在“下载原图”和“处理后”。</p>
+        <p id="output-hint" class="hint">原图放在“下载原图”；处理后按规格分目录保存：主图 900×1200、1200×1200，详情图宽 750px，底部增加 15px 白边。</p>
       </div>
     </section>
 
@@ -219,11 +219,11 @@
 
     function updateProcessingLabels() {
       const processing = $("mirror").checked || $("mosaic").checked;
-      $("download-button").textContent = processing ? "下载并处理图片" : "仅下载原图";
-      $("batch-button").textContent = processing ? "批量下载并处理" : "批量仅下载原图";
+      $("download-button").textContent = processing ? "下载并处理图片" : "下载并生成规格图";
+      $("batch-button").textContent = processing ? "批量下载并处理" : "批量下载并生成规格图";
       $("output-hint").textContent = processing
-        ? "每个商品按商品标题建文件夹；原图和处理结果分别放在“下载原图”和“处理后”。"
-        : "每个商品按商品标题建文件夹；只保存未处理的图片到“下载原图”。";
+        ? "原图放在“下载原图”；处理后按规格分目录保存：主图 900×1200、1200×1200，详情图宽 750px，底部增加 15px 白边。"
+        : "仍会生成规格图：主图 900×1200、1200×1200，详情图宽 750px，底部增加 15px 白边。";
     }
 
     function showExited() {

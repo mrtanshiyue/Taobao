@@ -431,7 +431,7 @@ def normalize_image(data: bytes) -> tuple[bytes, str]:
     return _encode_portable_image(image, preserve_png)
 
 
-def _transform_image(image: Image.Image, preserve_png: bool, mirror: bool, mosaic: bool) -> tuple[bytes, str, int]:
+def _transform_image(image: Image.Image, mirror: bool, mosaic: bool) -> tuple[Image.Image, int]:
     faces = 0
     if mosaic:
         rgb = np.asarray(image.convert("RGB"))
@@ -445,12 +445,38 @@ def _transform_image(image: Image.Image, preserve_png: bool, mirror: bool, mosai
             faces += 1
     if mirror:
         image = ImageOps.mirror(image)
-    return _encode_portable_image(image, preserve_png) + (faces,)
+    return image, faces
+
+
+def _fit_image(image: Image.Image, size: tuple[int, int], preserve_png: bool) -> Image.Image:
+    image = ImageOps.contain(image, size, method=Image.Resampling.LANCZOS)
+    x, y = (size[0] - image.width) // 2, (size[1] - image.height) // 2
+    if preserve_png:
+        canvas = Image.new("RGBA", size, (0, 0, 0, 0))
+        canvas.alpha_composite(image.convert("RGBA"), (x, y))
+    else:
+        canvas = Image.new("RGB", size, "white")
+        canvas.paste(image.convert("RGB"), (x, y))
+    return canvas
+
+
+def _detail_image(image: Image.Image, preserve_png: bool) -> Image.Image:
+    height = max(1, round(image.height * 750 / image.width))
+    image = image.resize((750, height), Image.Resampling.LANCZOS)
+    mode, background = ("RGBA", (0, 0, 0, 0)) if preserve_png else ("RGB", "white")
+    canvas = Image.new(mode, (750, height + 15), background)
+    if preserve_png:
+        canvas.alpha_composite(image.convert("RGBA"))
+        canvas.paste((255, 255, 255, 255), (0, height, 750, height + 15))
+    else:
+        canvas.paste(image.convert("RGB"), (0, 0))
+    return canvas
 
 
 def process_image(data: bytes, mirror: bool, mosaic: bool) -> tuple[bytes, str, int]:
     image, preserve_png = _open_image(data)
-    return _transform_image(image, preserve_png, mirror, mosaic)
+    image, faces = _transform_image(image, mirror, mosaic)
+    return _encode_portable_image(image, preserve_png) + (faces,)
 
 
 class BrowserWorker(threading.Thread):
@@ -610,8 +636,7 @@ class BrowserWorker(threading.Thread):
         originals = output_dir / "下载原图"
         processed = output_dir / "处理后"
         originals.mkdir(parents=True, exist_ok=True)
-        if mirror or mosaic:
-            processed.mkdir(parents=True, exist_ok=True)
+        processed.mkdir(parents=True, exist_ok=True)
         ok = failed = face_total = 0
         failure_details = []
         counts = {"主图": 0, "详情图": 0}
@@ -635,14 +660,21 @@ class BrowserWorker(threading.Thread):
                 stage = "保存原图"
                 (originals / f"{name}{ext}").write_bytes(normalized)
                 counts[item.category] = next_count
-                if mirror or mosaic:
-                    stage = "镜像和人脸处理"
-                    transformed, out_ext, faces = _transform_image(
-                        source_image.copy(), preserve_png, mirror, mosaic
-                    )
+                stage = "镜像、人脸处理和规格调整"
+                transformed, faces = _transform_image(source_image.copy(), mirror, mosaic)
+                derivatives = (
+                    (("主图_900x1200", _fit_image(transformed, (900, 1200), preserve_png)),
+                     ("主图_1200x1200", _fit_image(transformed, (1200, 1200), preserve_png)))
+                    if item.category == "主图"
+                    else (("详情图_750px", _detail_image(transformed, preserve_png)),)
+                )
+                for folder_name, derivative in derivatives:
                     stage = "保存处理后图片"
-                    (processed / f"{name}{out_ext}").write_bytes(transformed)
-                    face_total += faces
+                    target = processed / folder_name
+                    target.mkdir(parents=True, exist_ok=True)
+                    processed_data, out_ext = _encode_portable_image(derivative, preserve_png)
+                    (target / f"{name}{out_ext}").write_bytes(processed_data)
+                face_total += faces
                 ok += 1
             except Exception as exc:
                 failed += 1
