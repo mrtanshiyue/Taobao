@@ -1,0 +1,393 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>淘宝图片助手</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --paper: #f5f6f8;
+      --surface: #fff;
+      --ink: #17232e;
+      --muted: #74818c;
+      --line: #e4e8ec;
+      --blue: #315f91;
+      --action: #f04f2e;
+      --action-dark: #d93d1c;
+      --aqua: #e2f2f0;
+      --teal: #167a70;
+      --warning: #98600b;
+      --red: #b54137;
+      font-family: "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", sans-serif;
+      font-synthesis: none;
+      background: var(--paper);
+    }
+    * { box-sizing: border-box; }
+    body { min-height: 100vh; margin: 0; background: radial-gradient(ellipse at 15% 0, #fff 0, #f7f8fa 43%, #f0f3f5 100%); color: var(--ink); }
+    button, input, textarea { font: inherit; }
+    button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 3px solid #9cb9d4; outline-offset: 2px; }
+    .shell { width: min(1160px, calc(100% - 48px)); margin: 0 auto; padding: 24px 0 42px; }
+    header { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding-bottom: 22px; border-bottom: 1px solid rgba(23,35,46,.08); }
+    .brand { display: flex; align-items: center; gap: 12px; }
+    .mark { width: 43px; height: 43px; display: grid; place-items: center; background: var(--action); color: white; border-radius: 14px 14px 14px 4px; font-size: 21px; font-weight: 800; box-shadow: 0 7px 18px #f04f2e35; }
+    .brand-name { font-size: 16px; font-weight: 750; letter-spacing: .01em; }
+    .brand-caption { color: var(--muted); font-size: 11px; margin-top: 3px; }
+    .header-actions { display: flex; align-items: center; gap: 22px; }
+    .local-note { display: inline-flex; align-items: center; gap: 9px; color: var(--teal); font-size: 12px; font-weight: 700; }
+    .local-note::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: #19a197; box-shadow: 0 0 0 4px #d8efeb; }
+    .exit-button { border: 0; border-radius: 8px; padding: 8px 11px; background: transparent; color: #7c8790; font-size: 12px; cursor: pointer; }
+    .exit-button:hover:not(:disabled) { background: #eceff2; color: var(--ink); }
+    .exit-button:disabled { opacity: .45; cursor: not-allowed; }
+    .intro { display: flex; justify-content: space-between; align-items: flex-end; gap: 28px; padding: 30px 0 25px; }
+    h1 { font-size: clamp(28px, 4vw, 40px); letter-spacing: -.045em; line-height: 1.18; margin: 0 0 9px; }
+    .intro p { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.7; }
+    .steps { display: flex; align-items: center; flex: none; gap: 10px; padding-bottom: 2px; }
+    .step { display: flex; align-items: center; gap: 8px; color: #65727d; font-size: 11px; font-weight: 650; white-space: nowrap; }
+    .step b { display: grid; place-items: center; width: 25px; height: 25px; border-radius: 50%; background: #e9edef; color: #596872; font-size: 11px; }
+    .step:first-child b { background: #fff0ec; color: var(--action); }
+    .step-line { width: 24px; height: 1px; background: #dfe4e7; }
+    .workspace { display: grid; grid-template-columns: minmax(0, 1.48fr) minmax(300px, .86fr); gap: 16px; align-items: stretch; }
+    .panel { background: var(--surface); border: 1px solid rgba(33,48,60,.08); border-radius: 16px; padding: 22px; box-shadow: 0 8px 28px rgba(24,39,51,.045); }
+    .section-heading { display: flex; align-items: flex-start; gap: 11px; margin-bottom: 18px; }
+    .section-icon { display: grid; place-items: center; flex: none; width: 34px; height: 34px; border-radius: 10px; background: #fff0ec; color: var(--action); font-size: 15px; font-weight: 800; }
+    .section-title { font-size: 15px; font-weight: 750; margin: 1px 0 4px; }
+    .section-caption { color: var(--muted); font-size: 11px; line-height: 1.5; }
+    label { display: block; color: #37434d; font-size: 12px; font-weight: 650; margin-bottom: 8px; }
+    input[type="text"], input[type="url"] { width: 100%; min-height: 43px; border: 1px solid #d9dfe4; border-radius: 9px; padding: 0 12px; background: #fbfcfd; color: var(--ink); transition: border-color .15s, box-shadow .15s, background .15s; }
+    input[type="text"]:focus, input[type="url"]:focus, textarea:focus { border-color: #9eb5c8; background: #fff; box-shadow: 0 0 0 3px #315f9112; outline: 0; }
+    textarea { width: 100%; min-height: 124px; resize: vertical; border: 1px solid #d9dfe4; border-radius: 10px; padding: 13px 14px; background: #fbfcfd; color: var(--ink); line-height: 1.55; transition: border-color .15s, box-shadow .15s, background .15s; }
+    input::placeholder, textarea::placeholder { color: #9ba5ac; }
+    .url-row { display: flex; align-items: stretch; gap: 10px; }
+    .url-row textarea { min-width: 0; flex: 1; }
+    .button { min-height: 42px; border: 0; border-radius: 9px; padding: 0 16px; color: #fff; background: var(--action); font-weight: 700; font-size: 12px; cursor: pointer; transition: background .15s ease, transform .15s ease, box-shadow .15s ease; white-space: nowrap; }
+    .button:hover:not(:disabled) { background: var(--action-dark); box-shadow: 0 5px 13px #d93d1c2b; }
+    .button:active:not(:disabled) { transform: translateY(1px); }
+    .button:disabled { opacity: .42; cursor: not-allowed; box-shadow: none; }
+    .button.secondary { background: #f0f3f5; color: #31404b; }
+    .button.secondary:hover:not(:disabled) { background: #e6ebee; box-shadow: none; }
+    .url-row .button { align-self: flex-start; min-height: 43px; }
+    .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 11px; }
+    .output { margin-bottom: 19px; }
+    .checks { display: grid; gap: 9px; margin-top: 16px; }
+    .check { display: flex; align-items: center; gap: 10px; margin: 0; padding: 10px 11px; border: 1px solid #edf0f2; border-radius: 9px; color: #37434d; font-size: 12px; cursor: pointer; }
+    .check:hover { background: #fafbfc; }
+    .check input { width: 16px; height: 16px; margin: 0; accent-color: var(--action); }
+    .download { width: 100%; margin-top: 17px; min-height: 46px; }
+    .hint { margin: 10px 0 0; color: var(--muted); font-size: 11px; line-height: 1.6; }
+    .status { display: flex; align-items: flex-start; gap: 10px; margin: 14px 0; padding: 11px 14px; border: 1px solid #e7ebee; border-radius: 10px; background: #eef1f3; color: #52616b; font-size: 12px; line-height: 1.55; }
+    .status::before { content: ""; flex: none; width: 8px; height: 8px; margin-top: 4px; border-radius: 50%; background: #81949d; }
+    .status[data-kind="working"] { background: #edf3f9; border-color: #dde8f1; color: #31587a; }
+    .status[data-kind="working"]::before { background: var(--blue); animation: pulse 1.2s ease-in-out infinite; }
+    .status[data-kind="done"] { background: #eaf4ef; border-color: #dcece3; color: #176454; }
+    .status[data-kind="done"]::before { background: #218b71; }
+    .status[data-kind="warning"] { background: #fbf4e8; border-color: #f2e7d2; color: var(--warning); }
+    .status[data-kind="warning"]::before { background: #c48a20; }
+    .status[data-kind="error"] { background: #fbefed; border-color: #f2dfdc; color: var(--red); }
+    .status[data-kind="error"]::before { background: var(--red); }
+    .results { margin-top: 15px; padding: 0; overflow: hidden; }
+    .results-head { display: flex; justify-content: space-between; align-items: center; gap: 14px; padding: 18px 21px 15px; }
+    .results-title { margin: 0; font-size: 14px; font-weight: 750; }
+    .results-subtitle { margin-top: 4px; color: var(--muted); font-size: 11px; }
+    .counts { display: flex; gap: 7px; color: var(--muted); font-size: 11px; }
+    .count { display: inline-flex; gap: 5px; align-items: center; border: 1px solid #e8ecef; border-radius: 7px; background: #f7f9fa; padding: 6px 9px; }
+    .count b { color: var(--ink); font-size: 12px; }
+    .table-head, .image-row { display: grid; grid-template-columns: 130px minmax(0, 1fr); align-items: center; gap: 12px; }
+    .table-head { padding: 9px 21px; border-top: 1px solid #eef1f3; background: #fafbfc; color: #89949c; font-size: 10px; font-weight: 700; }
+    .image-list { max-height: 330px; overflow: auto; }
+    .image-row { min-height: 43px; padding: 8px 21px; border-top: 1px solid #f0f2f4; font-size: 11px; }
+    .image-row:hover { background: #fafcfd; }
+    .category { justify-self: start; max-width: 100%; border: 0; padding: 6px 9px; border-radius: 6px; color: #315875; background: #edf3f7; font: inherit; font-weight: 700; cursor: pointer; }
+    .category.detail { color: #176f72; background: var(--aqua); }
+    .image-url { color: #6f7d86; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .empty { padding: 44px 23px; color: #89959d; font-size: 12px; text-align: center; }
+    footer { margin-top: 14px; color: #8a959c; font-size: 10px; text-align: center; }
+    @keyframes pulse { 50% { box-shadow: 0 0 0 5px #315f9124; } }
+    @media (max-width: 820px) {
+      .shell { width: min(100% - 28px, 620px); padding-top: 18px; }
+      .intro { display: block; padding: 25px 0 19px; }
+      .steps { margin-top: 18px; }
+      .workspace { grid-template-columns: 1fr; }
+      .panel { padding: 18px; }
+      .results-head { padding: 17px 18px 14px; }
+      .table-head, .image-row { padding-left: 18px; padding-right: 18px; }
+    }
+    @media (max-width: 540px) {
+      .shell { width: calc(100% - 22px); }
+      .header-actions { gap: 10px; }
+      .local-note { font-size: 0; }
+      .local-note::before { font-size: initial; }
+      .intro p { font-size: 13px; }
+      .step { font-size: 10px; gap: 6px; }
+      .step-line { width: 12px; }
+      .url-row { flex-direction: column; }
+      .url-row .button { width: 100%; }
+      .results-head { align-items: flex-start; flex-direction: column; }
+      .table-head, .image-row { grid-template-columns: 95px minmax(0, 1fr); gap: 8px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; transition-duration: .01ms !important; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header>
+      <div class="brand">
+        <div class="mark" aria-hidden="true">淘</div>
+        <div><div class="brand-name">淘宝图片助手</div><div class="brand-caption">商品图下载与处理</div></div>
+      </div>
+      <div class="header-actions">
+        <div class="local-note">仅在本机处理</div>
+        <button id="exit-button" class="exit-button" type="button" title="停止本机服务并退出助手">退出助手</button>
+      </div>
+    </header>
+
+    <section class="intro" aria-labelledby="page-title">
+      <div>
+        <h1 id="page-title">商品图片，一次整理好。</h1>
+        <p>打开商品页，扫描主图与详情图，再批量下载、镜像并给人脸打马赛克。</p>
+      </div>
+      <div class="steps" aria-label="操作步骤">
+        <div class="step"><b>1</b><span>添加商品</span></div><i class="step-line"></i>
+        <div class="step"><b>2</b><span>识别图片</span></div><i class="step-line"></i>
+        <div class="step"><b>3</b><span>处理保存</span></div>
+      </div>
+    </section>
+
+    <section class="workspace" aria-label="商品图片处理">
+      <div class="panel">
+        <div class="section-heading"><div class="section-icon" aria-hidden="true">01</div><div><h2 class="section-title">添加商品</h2><div class="section-caption">粘贴淘宝或天猫商品链接</div></div></div>
+        <label for="product-url">淘宝或天猫商品链接（批量时每行一个）</label>
+        <div class="url-row">
+          <textarea id="product-url" placeholder="粘贴一个或多个商品链接，每行一个"></textarea>
+          <button id="open-button" class="button" type="button">打开商品页</button>
+        </div>
+        <div class="actions">
+          <button id="scan-button" class="button secondary" type="button" disabled>扫描图片</button>
+          <button id="batch-button" class="button secondary" type="button">批量下载并处理</button>
+          <button id="diagnose-button" class="button secondary" type="button" disabled>页面诊断</button>
+        </div>
+        <p class="hint">如页面要求登录，请在弹出的浏览器窗口完成登录，再回来扫描。</p>
+      </div>
+
+      <div class="panel">
+        <div class="section-heading"><div class="section-icon" aria-hidden="true">02</div><div><h2 class="section-title">处理设置</h2><div class="section-caption">选择输出位置和图片处理方式</div></div></div>
+        <div class="output">
+          <label for="output-dir">保存到电脑上的文件夹</label>
+          <input id="output-dir" type="text" spellcheck="false">
+        </div>
+        <div class="checks">
+          <label class="check"><input id="mirror" type="checkbox" checked> 图片左右镜像</label>
+          <label class="check"><input id="mosaic" type="checkbox" checked> 识别人脸并打马赛克</label>
+        </div>
+        <button id="download-button" class="button download" type="button" disabled>下载并处理图片</button>
+        <p id="output-hint" class="hint">每个商品按商品标题建文件夹；原图和处理结果分别放在“下载原图”和“处理后”。</p>
+      </div>
+    </section>
+
+    <div id="status" class="status" role="status" aria-live="polite" data-kind="idle">正在连接本机服务…</div>
+
+    <section class="panel results" aria-labelledby="results-title">
+      <div class="results-head">
+        <div><h2 id="results-title" class="results-title">扫描结果</h2><div class="results-subtitle">可调整图片类型，确认后再开始下载</div></div>
+        <div class="counts"><span class="count">主图 <b id="main-count">0</b></span><span class="count">详情图 <b id="detail-count">0</b></span></div>
+      </div>
+      <div class="table-head"><span>图片类型（可修改）</span><span>图片地址</span></div>
+      <div id="image-list" class="image-list"><div class="empty">扫描后，找到的图片会显示在这里。</div></div>
+    </section>
+    <footer>本地服务仅监听此电脑。下载图片和人脸处理均在本机完成。</footer>
+  </main>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const statusEl = $("status");
+    let lastSignature = "";
+    let outputInitialized = false;
+    let shuttingDown = false;
+    const newUiSession = () => window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID() : Date.now() + "-" + Math.random().toString(36).slice(2);
+    let uiSession = newUiSession();
+
+    function productLinks() {
+      return $("product-url").value.split(/\r?\n+/).map((value) => value.trim()).filter(Boolean);
+    }
+
+    function normalizedUrl(value) {
+      return value.includes("://") ? value : "https://" + value;
+    }
+
+    function updateProcessingLabels() {
+      const processing = $("mirror").checked || $("mosaic").checked;
+      $("download-button").textContent = processing ? "下载并处理图片" : "仅下载原图";
+      $("batch-button").textContent = processing ? "批量下载并处理" : "批量仅下载原图";
+      $("output-hint").textContent = processing
+        ? "每个商品按商品标题建文件夹；原图和处理结果分别放在“下载原图”和“处理后”。"
+        : "每个商品按商品标题建文件夹；只保存未处理的图片到“下载原图”。";
+    }
+
+    async function post(path, data) {
+      const response = await fetch(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data)
+      });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error || "操作失败。");
+    }
+
+    function renderImages(images, busy) {
+      const signature = images.map((item) => item.category + item.url).join("\n");
+      if (signature === lastSignature) {
+        $("image-list").querySelectorAll("select[data-index]").forEach((select) => { select.disabled = busy; });
+        return;
+      }
+      lastSignature = signature;
+      const list = $("image-list");
+      list.replaceChildren();
+      if (!images.length) {
+        const empty = document.createElement("div");
+        empty.className = "empty";
+        empty.textContent = "扫描后，找到的图片会显示在这里。";
+        list.append(empty);
+      }
+      let main = 0;
+      let detail = 0;
+      for (const [index, item] of images.entries()) {
+        if (item.category === "主图") main++;
+        else detail++;
+        const row = document.createElement("div");
+        row.className = "image-row";
+        const badge = document.createElement("select");
+        badge.className = "category" + (item.category === "详情图" ? " detail" : "");
+        badge.setAttribute("aria-label", "第 " + (index + 1) + " 张图片类型");
+        badge.dataset.index = index;
+        badge.disabled = busy;
+        for (const category of ["主图", "详情图"]) {
+          const option = document.createElement("option");
+          option.value = category;
+          option.textContent = category;
+          badge.append(option);
+        }
+        badge.value = item.category;
+        const address = document.createElement("span");
+        address.className = "image-url";
+        address.textContent = item.url;
+        address.title = item.url;
+        row.append(badge, address);
+        list.append(row);
+      }
+      $("main-count").textContent = main;
+      $("detail-count").textContent = detail;
+    }
+
+    async function refresh() {
+      try {
+        const response = await fetch("/api/state?session=" + encodeURIComponent(uiSession), { cache: "no-store" });
+        const state = await response.json();
+        statusEl.textContent = state.status;
+        statusEl.dataset.kind = state.status_kind;
+        if (!outputInitialized) {
+          $("output-dir").value = state.output_dir;
+          outputInitialized = true;
+        }
+        renderImages(state.images, state.busy);
+        const links = productLinks();
+        const currentProduct = links.length === 1 && normalizedUrl(links[0]) === state.current_url;
+        $("open-button").disabled = state.busy;
+        $("scan-button").disabled = state.busy || !state.page_open || !currentProduct;
+        $("diagnose-button").disabled = state.busy || !state.page_open || !currentProduct;
+        $("download-button").disabled = state.busy || !state.images.length || !currentProduct;
+        $("batch-button").disabled = state.busy;
+        $("exit-button").disabled = state.busy;
+      } catch (_error) {
+        if (shuttingDown) {
+          statusEl.textContent = "助手已退出，可以关闭此窗口。";
+          statusEl.dataset.kind = "done";
+          return;
+        }
+        statusEl.textContent = "本机服务已停止。重新启动淘宝图片助手即可连接。";
+        statusEl.dataset.kind = "error";
+      }
+    }
+
+    $("open-button").addEventListener("click", async () => {
+      try {
+        const first = productLinks()[0] || "";
+        await post("/api/open", { url: first });
+      }
+      catch (error) { statusEl.textContent = error.message; statusEl.dataset.kind = "error"; }
+      refresh();
+    });
+    $("batch-button").addEventListener("click", async () => {
+      try {
+        await post("/api/batch", {
+          urls: $("product-url").value,
+          output_dir: $("output-dir").value,
+          mirror: $("mirror").checked,
+          mosaic: $("mosaic").checked
+        });
+      } catch (error) { statusEl.textContent = error.message; statusEl.dataset.kind = "error"; }
+      refresh();
+    });
+    $("product-url").addEventListener("input", refresh);
+    $("mirror").addEventListener("change", updateProcessingLabels);
+    $("mosaic").addEventListener("change", updateProcessingLabels);
+    $("scan-button").addEventListener("click", async () => {
+      try { await post("/api/scan", {}); }
+      catch (error) { statusEl.textContent = error.message; statusEl.dataset.kind = "error"; }
+      refresh();
+    });
+    $("diagnose-button").addEventListener("click", async () => {
+      try { await post("/api/diagnose", {}); }
+      catch (error) { statusEl.textContent = error.message; statusEl.dataset.kind = "error"; }
+      refresh();
+    });
+    $("image-list").addEventListener("change", async (event) => {
+      const select = event.target.closest("select[data-index]");
+      if (!select) return;
+      select.classList.toggle("detail", select.value === "详情图");
+      try { await post("/api/category", { index: Number(select.dataset.index), category: select.value }); }
+      catch (error) { statusEl.textContent = error.message; statusEl.dataset.kind = "error"; }
+      refresh();
+    });
+    $("download-button").addEventListener("click", async () => {
+      try {
+        await post("/api/download", {
+          output_dir: $("output-dir").value,
+          mirror: $("mirror").checked,
+          mosaic: $("mosaic").checked
+        });
+      } catch (error) { statusEl.textContent = error.message; statusEl.dataset.kind = "error"; }
+      refresh();
+    });
+    $("exit-button").addEventListener("click", async () => {
+      if (!window.confirm("停止本机服务并退出淘宝图片助手？")) return;
+      shuttingDown = true;
+      try {
+        await post("/api/shutdown", {});
+        statusEl.textContent = "助手已退出，可以关闭此窗口。";
+        statusEl.dataset.kind = "done";
+      } catch (error) {
+        shuttingDown = false;
+        statusEl.textContent = error.message;
+        statusEl.dataset.kind = "error";
+      }
+    });
+    window.addEventListener("pagehide", () => {
+      if (shuttingDown) return;
+      const url = "/api/disconnect?session=" + encodeURIComponent(uiSession);
+      if (navigator.sendBeacon) navigator.sendBeacon(url);
+      else fetch(url, { method: "POST", keepalive: true });
+    });
+    window.addEventListener("pageshow", (event) => {
+      if (event.persisted) {
+        uiSession = newUiSession();
+        refresh();
+      }
+    });
+    updateProcessingLabels();
+    refresh();
+    setInterval(refresh, 650);
+  </script>
+</body>
+</html>

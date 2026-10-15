@@ -1,0 +1,41 @@
+name: Build Windows EXE
+
+on:
+  push:
+    branches: [main, codex/build-windows-exe]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      CI: true
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies and YuNet model
+        shell: cmd
+        run: setup.bat
+
+      - name: Build EXE
+        shell: cmd
+        run: build_exe.bat
+
+      - name: Upload Windows EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: 淘宝图片助手-Windows-x64
+          path: |
+            dist/淘宝图片助手.exe
+            dist/第三方模型许可证.txt
+          if-no-files-found: error
+          retention-days: 30
