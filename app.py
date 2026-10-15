@@ -526,13 +526,14 @@ def _crop_image(image: Image.Image, size: tuple[int, int], subject: tuple[int, i
 
 
 def _detail_image(image: Image.Image, preserve_png: bool) -> Image.Image:
-    height = max(1, round(image.height * 750 / image.width))
-    image = image.resize((750, height), Image.Resampling.LANCZOS)
+    width = min(750, image.width)
+    height = max(1, round(image.height * width / image.width))
+    image = image.resize((width, height), Image.Resampling.LANCZOS)
     mode, background = ("RGBA", (0, 0, 0, 0)) if preserve_png else ("RGB", "white")
-    canvas = Image.new(mode, (750, height + 15), background)
+    canvas = Image.new(mode, (width, height + 15), background)
     if preserve_png:
         canvas.alpha_composite(image.convert("RGBA"))
-        canvas.paste((255, 255, 255, 255), (0, height, 750, height + 15))
+        canvas.paste((255, 255, 255, 255), (0, height, width, height + 15))
     else:
         canvas.paste(image.convert("RGB"), (0, 0))
     return canvas

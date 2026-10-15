@@ -182,7 +182,7 @@
           <label class="check"><input id="mosaic" type="checkbox" checked> 识别人脸并打马赛克</label>
         </div>
         <button id="download-button" class="button download" type="button" disabled>下载并处理图片</button>
-        <p id="output-hint" class="hint">主图按 900×1200、1200×1200 比例围绕人物或商品主体居中裁切；未识别时从画面中心裁切，不加留白。详情图宽 750px，底部增加 15px 白边。</p>
+        <p id="output-hint" class="hint">主图按 900×1200、1200×1200 比例围绕人物或商品主体居中裁切；未识别时从画面中心裁切，不加留白。详情图宽度最多 750px（小图不放大），高度按比例缩放，底部增加 15px 白边。</p>
       </div>
     </section>
 
@@ -222,8 +222,8 @@
       $("download-button").textContent = processing ? "下载并处理图片" : "下载并生成规格图";
       $("batch-button").textContent = processing ? "批量下载并处理" : "批量下载并生成规格图";
       $("output-hint").textContent = processing
-        ? "原图放在“下载原图”；主图按 900×1200、1200×1200 比例围绕人物或商品主体居中裁切，未识别时从中心裁切，不加留白；详情图宽 750px，底部 15px 白边。"
-        : "仍会生成规格图：主图按 900×1200、1200×1200 比例居中裁切，详情图宽 750px，底部 15px 白边。";
+        ? "原图放在“下载原图”；主图按 900×1200、1200×1200 比例围绕人物或商品主体居中裁切，未识别时从中心裁切，不加留白；详情图宽度最多 750px，小图不放大，底部 15px 白边。"
+        : "仍会生成规格图：主图按 900×1200、1200×1200 比例居中裁切，详情图宽度最多 750px，小图不放大，底部 15px 白边。";
     }
 
     function showExited() {
