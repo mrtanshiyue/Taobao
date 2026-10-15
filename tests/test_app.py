@@ -103,6 +103,7 @@ class ImageHelpersTests(unittest.TestCase):
         self.assertEqual(image_url("//img.alicdn.com/item.jpg"), "https://img.alicdn.com/item.jpg")
         self.assertEqual(image_url("http://img.alicdn.com/item.jpg"), "https://img.alicdn.com/item.jpg")
         self.assertIsNone(image_url("https://example.com/item.jpg"))
+        self.assertIsNone(image_url("https://untrusted.taobao.com/item.jpg"))
         self.assertIsNone(image_url("https://img.alicdn.com/logo.png"))
         self.assertIsNone(image_url("https://img.alicdn.com:444/item.jpg"))
         self.assertIsNone(image_url("https://img.alicdn.com@127.0.0.1/item.jpg"))
@@ -407,6 +408,98 @@ class LocalAppStatusTests(unittest.TestCase):
 
 
 class BrowserWorkerTests(unittest.TestCase):
+    def test_batch_continues_when_first_product_navigation_fails(self):
+        from pathlib import Path
+        from queue import Queue
+        from tempfile import TemporaryDirectory
+
+        class FakeLocator:
+            first = None
+
+            def __init__(self):
+                self.first = self
+
+            def get_attribute(self, _name, timeout):
+                return "商品标题"
+
+            def inner_text(self, timeout):
+                return "商品标题"
+
+        class FakePage:
+            def __init__(self):
+                self.url = "about:blank"
+                self.visits = 0
+
+            def goto(self, url, **_kwargs):
+                self.visits += 1
+                self.url = url
+                if self.visits == 1:
+                    raise TimeoutError("第一个商品页超时")
+
+            def wait_for_timeout(self, _timeout):
+                pass
+
+            def locator(self, _selector):
+                return FakeLocator()
+
+        class FakeContext:
+            def __init__(self, page):
+                self.pages = [page]
+
+            def cookies(self, _urls):
+                return [{"name": "unb", "value": "present"}]
+
+            def close(self):
+                pass
+
+        class FakePlaywright:
+            def __init__(self, context):
+                self.chromium = type(
+                    "Chromium", (), {"launch_persistent_context": lambda *_args, **_kwargs: context}
+                )()
+
+        class FakePlaywrightContext:
+            def __init__(self, playwright):
+                self.playwright = playwright
+
+            def __enter__(self):
+                return self.playwright
+
+            def __exit__(self, *_args):
+                pass
+
+        page = FakePage()
+        context = FakeContext(page)
+        worker = BrowserWorker()
+
+        def fake_download(_self, _context, _referer, _images, output_dir, *_args, **_kwargs):
+            return 1, 0, 0, str(output_dir), ""
+
+        with TemporaryDirectory() as directory, \
+             patch("app.APP_DIR", Path(directory)), \
+             patch("app.sync_playwright", return_value=FakePlaywrightContext(FakePlaywright(context))), \
+             patch("app.scan_product_page", return_value=([ProductImage("https://img.alicdn.com/a.jpg", "主图")], "")), \
+             patch.object(BrowserWorker, "download", fake_download):
+            worker.commands.put(("batch", [
+                "https://item.taobao.com/item.htm?id=1",
+                "https://item.taobao.com/item.htm?id=2",
+            ], Path(directory), False, False))
+            worker.commands.put(("quit",))
+            worker.run()
+
+            events = []
+            while not worker.events.empty():
+                events.append(worker.events.get_nowait())
+            completed = [value for kind, value in events if kind == "batch_complete"]
+            self.assertTrue(completed, events)
+            result = completed[0]
+
+            self.assertEqual(result["product_errors"], 1)
+            self.assertEqual(result["ok"], 1)
+            self.assertEqual([product["ok"] for product in result["products"]], [0, 1])
+            self.assertTrue(Path(directory, "商品-1", "下载失败记录.txt").exists())
+            self.assertEqual(page.visits, 2)
+
     def test_submit_restarts_dead_worker_and_preserves_pending_events(self):
         from queue import Queue
 

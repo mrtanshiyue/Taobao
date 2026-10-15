@@ -23,7 +23,7 @@ except ImportError as exc:
 
 
 APP_DIR = Path.home() / ".taobao_image_helper"
-IMAGE_HOSTS = ("alicdn.com", "tbcdn.cn", "taobao.com", "taobaocdn.com")
+IMAGE_HOSTS = ("alicdn.com", "tbcdn.cn", "taobaocdn.com")
 PRODUCT_HOSTS = ("taobao.com", "tmall.com", "tmall.hk", "tb.cn")
 MAIN_IMAGE_CONTAINERS = (
     "#picGalleryEle", "#tb-gallery", ".tb-gallery", "#J_UlThumb", ".J_UlThumb",
@@ -530,14 +530,21 @@ class BrowserWorker(threading.Thread):
                                     str(APP_DIR / "browser"), channel="msedge", headless=False, viewport=None
                                 )
                                 page = context.pages[0] if context.pages else context.new_page()
-                            page.goto(urls[0], wait_until="domcontentloaded", timeout=60000)
-                            require_taobao_login(context, page)
+                            first_navigation_error = None
+                            try:
+                                page.goto(urls[0], wait_until="domcontentloaded", timeout=60000)
+                            except Exception as exc:
+                                first_navigation_error = exc
+                            else:
+                                require_taobao_login(context, page)
                             products = []
                             totals = {"ok": 0, "failed": 0, "product_errors": 0, "scan_warnings": 0, "faces": 0}
                             for index, url in enumerate(urls, 1):
                                 folder = None
                                 stage = "打开商品页"
                                 try:
+                                    if index == 1 and first_navigation_error:
+                                        raise first_navigation_error
                                     if index > 1:
                                         page.goto(url, wait_until="domcontentloaded", timeout=60000)
                                     page.wait_for_timeout(1000)
