@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>淘宝图片助手</title>
+  <title>淘宝图片助手｜RUYISTUDIO</title>
   <style>
     :root {
       color-scheme: light;
@@ -135,11 +135,11 @@
     <header>
       <div class="brand">
         <div class="mark" aria-hidden="true">淘</div>
-        <div><div class="brand-name">淘宝图片助手</div><div class="brand-caption">商品图下载与处理</div></div>
+        <div><div class="brand-name">淘宝图片助手</div><div class="brand-caption">RUYISTUDIO 制作</div></div>
       </div>
       <div class="header-actions">
         <div class="local-note">仅在本机处理</div>
-        <button id="exit-button" class="exit-button" type="button" title="停止本机服务并退出助手">退出助手</button>
+        <button id="exit-button" class="exit-button" type="button" title="停止本机服务；退出后请手动关闭浏览器标签页">退出助手</button>
       </div>
     </header>
 
@@ -196,7 +196,7 @@
       <div class="table-head"><span>图片类型（可修改）</span><span>图片地址</span></div>
       <div id="image-list" class="image-list"><div class="empty">扫描后，找到的图片会显示在这里。</div></div>
     </section>
-    <footer>本地服务仅监听此电脑。下载图片和人脸处理均在本机完成。</footer>
+    <footer>本地服务仅监听此电脑，下载和图片处理均在本机完成。</footer>
   </main>
 
   <script>
@@ -205,6 +205,7 @@
     let lastSignature = "";
     let outputInitialized = false;
     let shuttingDown = false;
+    let refreshTimer;
     const newUiSession = () => window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID() : Date.now() + "-" + Math.random().toString(36).slice(2);
     let uiSession = newUiSession();
 
@@ -223,6 +224,13 @@
       $("output-hint").textContent = processing
         ? "每个商品按商品标题建文件夹；原图和处理结果分别放在“下载原图”和“处理后”。"
         : "每个商品按商品标题建文件夹；只保存未处理的图片到“下载原图”。";
+    }
+
+    function showExited() {
+      statusEl.textContent = "助手已退出，本机服务已停止。浏览器页面不会自动关闭，请手动关闭此标签页。";
+      statusEl.dataset.kind = "done";
+      document.querySelectorAll("button, input, textarea, select").forEach((control) => { control.disabled = true; });
+      $("exit-button").textContent = "已退出";
     }
 
     async function post(path, data) {
@@ -281,9 +289,11 @@
     }
 
     async function refresh() {
+      if (shuttingDown) return;
       try {
         const response = await fetch("/api/state?session=" + encodeURIComponent(uiSession), { cache: "no-store" });
         const state = await response.json();
+        if (shuttingDown) return;
         statusEl.textContent = state.status;
         statusEl.dataset.kind = state.status_kind;
         if (!outputInitialized) {
@@ -361,17 +371,31 @@
       refresh();
     });
     $("exit-button").addEventListener("click", async () => {
-      if (!window.confirm("停止本机服务并退出淘宝图片助手？")) return;
       shuttingDown = true;
+      clearInterval(refreshTimer);
+      $("exit-button").disabled = true;
+      statusEl.textContent = "正在停止本机服务…";
+      statusEl.dataset.kind = "working";
+      let requestError = "";
       try {
         await post("/api/shutdown", {});
-        statusEl.textContent = "助手已退出，可以关闭此窗口。";
-        statusEl.dataset.kind = "done";
       } catch (error) {
-        shuttingDown = false;
-        statusEl.textContent = error.message;
-        statusEl.dataset.kind = "error";
+        requestError = error.message;
       }
+      for (let attempt = 0; attempt < 15; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        try {
+          await fetch("/api/state", { cache: "no-store" });
+        } catch (_error) {
+          showExited();
+          return;
+        }
+      }
+      shuttingDown = false;
+      await refresh();
+      statusEl.textContent = requestError || "退出未完成：本机服务仍在响应，请重试。";
+      statusEl.dataset.kind = "error";
+      refreshTimer = setInterval(refresh, 650);
     });
     window.addEventListener("pagehide", () => {
       if (shuttingDown) return;
@@ -387,7 +411,7 @@
     });
     updateProcessingLabels();
     refresh();
-    setInterval(refresh, 650);
+    refreshTimer = setInterval(refresh, 650);
   </script>
 </body>
 </html>
