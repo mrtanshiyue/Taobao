@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import queue
 import threading
 import time
@@ -374,9 +375,18 @@ def serve():
 
     threading.Thread(target=stop_when_window_closes, daemon=True).start()
     try:
-        if not webbrowser.open(address):
-            print("无法自动打开浏览器；本机服务将退出。")
-            server.shutdown()
+        try:
+            opened = webbrowser.open(address, new=2)
+        except (OSError, webbrowser.Error):
+            opened = False
+        if not opened and hasattr(os, "startfile"):
+            try:
+                os.startfile(address)
+                opened = True
+            except OSError:
+                pass
+        if not opened:
+            print(f"无法自动打开浏览器；请手动访问：{address}")
         server_thread.join()
     except KeyboardInterrupt:
         server.shutdown()
