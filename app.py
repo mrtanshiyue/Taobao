@@ -390,6 +390,70 @@ def _face_detector():
     )
 
 
+@lru_cache(maxsize=1)
+def _subject_detector():
+    net = cv2.dnn.readNet(str(_resource_path("models/object_detection_nanodet_2022nov.onnx")))
+    strides = (8, 16, 32, 64)
+    anchors = []
+    for stride in strides:
+        side = 416 // stride
+        y, x = np.mgrid[:side, :side]
+        anchors.append(np.column_stack((
+            x.ravel() * stride + (stride - 1) / 2,
+            y.ravel() * stride + (stride - 1) / 2,
+        )))
+    return net, strides, anchors
+
+
+def subject_box(image: Image.Image) -> tuple[int, int, int, int] | None:
+    rgb = np.asarray(image.convert("RGB"))
+    height, width = rgb.shape[:2]
+    scale = min(416 / width, 416 / height)
+    resized_width, resized_height = max(1, round(width * scale)), max(1, round(height * scale))
+    resized = cv2.resize(rgb, (resized_width, resized_height), interpolation=cv2.INTER_AREA)
+    left, top = (416 - resized_width) // 2, (416 - resized_height) // 2
+    letterboxed = np.zeros((416, 416, 3), dtype=np.uint8)
+    letterboxed[top:top + resized_height, left:left + resized_width] = resized
+    normalized = (letterboxed.astype(np.float32) - np.array([103.53, 116.28, 123.675], dtype=np.float32)) / np.array([57.375, 57.12, 58.395], dtype=np.float32)
+    net, strides, anchors = _subject_detector()
+    net.setInput(cv2.dnn.blobFromImage(normalized))
+    outputs = net.forward(net.getUnconnectedOutLayersNames())
+
+    boxes, scores, classes = [], [], []
+    for stride, class_scores, distances, points in zip(strides, outputs[::2], outputs[1::2], anchors):
+        class_scores = np.asarray(class_scores).reshape(-1, 80)
+        distances = np.asarray(distances).reshape(-1, 32)
+        confidence = class_scores.max(axis=1)
+        selected = np.argsort(confidence)[-1000:]
+        confidence, class_scores, distances, points = confidence[selected], class_scores[selected], distances[selected], points[selected]
+        distances = distances.reshape(-1, 4, 8)
+        distances = np.exp(distances - distances.max(axis=2, keepdims=True))
+        distances /= distances.sum(axis=2, keepdims=True)
+        distances = (distances @ np.arange(8, dtype=np.float32)) * stride
+        boxes.extend(np.column_stack((
+            points[:, 0] - distances[:, 0], points[:, 1] - distances[:, 1],
+            points[:, 0] + distances[:, 2], points[:, 1] + distances[:, 3],
+        )).tolist())
+        scores.extend(confidence.tolist())
+        classes.extend(class_scores.argmax(axis=1).tolist())
+
+    indices = cv2.dnn.NMSBoxes([[(x1 + x2) / 2, (y1 + y2) / 2, x2 - x1, y2 - y1] for x1, y1, x2, y2 in boxes], scores, 0.35, 0.6)
+    if len(indices) == 0:
+        return None
+    # shortcut: COCO has limited fashion-product classes, so an undetected subject uses center crop.
+    # Prefer a person when present; otherwise select the largest confident detected object.
+    candidates = [int(index) for index in np.asarray(indices).reshape(-1) if classes[int(index)] == 0]
+    if not candidates:
+        candidates = [int(index) for index in np.asarray(indices).reshape(-1)]
+    index = max(candidates, key=lambda i: scores[i] * (boxes[i][2] - boxes[i][0]) * (boxes[i][3] - boxes[i][1]))
+    x1, y1, x2, y2 = boxes[index]
+    x1 = max(0, min(width, round((x1 - left) * width / resized_width)))
+    x2 = max(0, min(width, round((x2 - left) * width / resized_width)))
+    y1 = max(0, min(height, round((y1 - top) * height / resized_height)))
+    y2 = max(0, min(height, round((y2 - top) * height / resized_height)))
+    return (x1, y1, x2 - x1, y2 - y1) if x2 > x1 and y2 > y1 else None
+
+
 def face_boxes(rgb: np.ndarray) -> list[tuple[int, int, int, int]]:
     # shortcut: YuNet can miss tiny or occluded faces; review those images manually.
     image = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
@@ -448,16 +512,17 @@ def _transform_image(image: Image.Image, mirror: bool, mosaic: bool) -> tuple[Im
     return image, faces
 
 
-def _fit_image(image: Image.Image, size: tuple[int, int], preserve_png: bool) -> Image.Image:
-    image = ImageOps.contain(image, size, method=Image.Resampling.LANCZOS)
-    x, y = (size[0] - image.width) // 2, (size[1] - image.height) // 2
-    if preserve_png:
-        canvas = Image.new("RGBA", size, (0, 0, 0, 0))
-        canvas.alpha_composite(image.convert("RGBA"), (x, y))
-    else:
-        canvas = Image.new("RGB", size, "white")
-        canvas.paste(image.convert("RGB"), (x, y))
-    return canvas
+def _crop_image(image: Image.Image, size: tuple[int, int], subject: tuple[int, int, int, int] | None = None) -> Image.Image:
+    width, height = image.size
+    target_ratio = size[0] / size[1]
+    crop_width, crop_height = (round(height * target_ratio), height) if width / height > target_ratio else (width, round(width / target_ratio))
+    center_x, center_y = (width / 2, height / 2)
+    if subject:
+        x, y, subject_width, subject_height = subject
+        center_x, center_y = x + subject_width / 2, y + subject_height / 2
+    left = max(0, min(width - crop_width, round(center_x - crop_width / 2)))
+    top = max(0, min(height - crop_height, round(center_y - crop_height / 2)))
+    return image.crop((left, top, left + crop_width, top + crop_height)).resize(size, Image.Resampling.LANCZOS)
 
 
 def _detail_image(image: Image.Image, preserve_png: bool) -> Image.Image:
@@ -660,11 +725,17 @@ class BrowserWorker(threading.Thread):
                 stage = "保存原图"
                 (originals / f"{name}{ext}").write_bytes(normalized)
                 counts[item.category] = next_count
-                stage = "镜像、人脸处理和规格调整"
+                stage = "镜像、人脸处理、主体识别和规格调整"
                 transformed, faces = _transform_image(source_image.copy(), mirror, mosaic)
+                subject = None
+                if item.category == "主图":
+                    try:
+                        subject = subject_box(transformed)
+                    except Exception as exc:
+                        self.emit("progress", f"{progress_label}主体识别失败，改用中心裁切（{type(exc).__name__}）")
                 derivatives = (
-                    (("主图_900x1200", _fit_image(transformed, (900, 1200), preserve_png)),
-                     ("主图_1200x1200", _fit_image(transformed, (1200, 1200), preserve_png)))
+                    (("主图_900x1200", _crop_image(transformed, (900, 1200), subject)),
+                     ("主图_1200x1200", _crop_image(transformed, (1200, 1200), subject)))
                     if item.category == "主图"
                     else (("详情图_750px", _detail_image(transformed, preserve_png)),)
                 )

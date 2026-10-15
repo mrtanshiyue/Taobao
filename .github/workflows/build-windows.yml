@@ -22,7 +22,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install dependencies and YuNet model
+      - name: Install dependencies and detection models
         shell: cmd
         run: setup.bat
 
@@ -37,5 +37,6 @@ jobs:
           path: |
             dist/淘宝图片助手.exe
             dist/第三方模型许可证.txt
+            dist/NanoDet模型许可证.txt
           if-no-files-found: error
           retention-days: 30
