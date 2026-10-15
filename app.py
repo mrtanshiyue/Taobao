@@ -405,7 +405,12 @@ def _subject_detector():
     return net, strides, anchors
 
 
-def subject_box(image: Image.Image) -> tuple[int, int, int, int] | None:
+@lru_cache(maxsize=1)
+def _saliency_detector():
+    return cv2.dnn.readNet(str(_resource_path("models/u2netp.onnx")))
+
+
+def _detected_subject_box(image: Image.Image) -> tuple[int, int, int, int] | None:
     rgb = np.asarray(image.convert("RGB"))
     height, width = rgb.shape[:2]
     scale = min(416 / width, 416 / height)
@@ -440,7 +445,6 @@ def subject_box(image: Image.Image) -> tuple[int, int, int, int] | None:
     indices = cv2.dnn.NMSBoxes([[(x1 + x2) / 2, (y1 + y2) / 2, x2 - x1, y2 - y1] for x1, y1, x2, y2 in boxes], scores, 0.35, 0.6)
     if len(indices) == 0:
         return None
-    # shortcut: COCO has limited fashion-product classes, so an undetected subject uses center crop.
     # Prefer a person when present; otherwise select the largest confident detected object.
     candidates = [int(index) for index in np.asarray(indices).reshape(-1) if classes[int(index)] == 0]
     if not candidates:
@@ -452,6 +456,56 @@ def subject_box(image: Image.Image) -> tuple[int, int, int, int] | None:
     y1 = max(0, min(height, round((y1 - top) * height / resized_height)))
     y2 = max(0, min(height, round((y2 - top) * height / resized_height)))
     return (x1, y1, x2 - x1, y2 - y1) if x2 > x1 and y2 > y1 else None
+
+
+def saliency_subject_box(image: Image.Image) -> tuple[int, int, int, int] | None:
+    rgb = np.asarray(image.convert("RGB"))
+    height, width = rgb.shape[:2]
+    resized = cv2.resize(rgb, (320, 320), interpolation=cv2.INTER_AREA)
+    means = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+    stds = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+    normalized = (resized.astype(np.float32) / 255.0 - means) / stds
+    net = _saliency_detector()
+    net.setInput(cv2.dnn.blobFromImage(normalized))
+    prediction = np.asarray(net.forward(net.getUnconnectedOutLayersNames())[0], dtype=np.float32).squeeze()
+    if prediction.ndim != 2 or not np.isfinite(prediction).all():
+        return None
+    prediction = cv2.resize(prediction, (width, height), interpolation=cv2.INTER_LINEAR)
+    low, high = float(prediction.min()), float(prediction.max())
+    if high - low < 1e-6:
+        return None
+    mask = np.uint8((prediction - low) / (high - low) >= 0.5)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((5, 5), dtype=np.uint8))
+    count, _labels, stats, _centers = cv2.connectedComponentsWithStats(mask, 8)
+    components = [i for i in range(1, count) if stats[i, cv2.CC_STAT_AREA] >= max(16, round(width * height * 0.002))]
+    if not components:
+        return None
+    index = max(components, key=lambda i: stats[i, cv2.CC_STAT_AREA])
+    x, y, box_width, box_height, area = (int(value) for value in stats[index])
+    if area >= width * height * 0.98:
+        return None
+    return x, y, box_width, box_height
+
+
+def subject_box(image: Image.Image) -> tuple[int, int, int, int] | None:
+    detection_error = None
+    try:
+        detected = _detected_subject_box(image)
+        if detected:
+            return detected
+    except Exception as exc:
+        detection_error = exc
+    try:
+        segmented = saliency_subject_box(image)
+    except Exception as exc:
+        if detection_error:
+            raise RuntimeError(f"目标检测和主体分割均失败：{detection_error}; {exc}") from exc
+        raise
+    if segmented:
+        return segmented
+    if detection_error:
+        raise RuntimeError(f"目标检测失败且主体分割未找到主体：{detection_error}") from detection_error
+    return None
 
 
 def face_boxes(rgb: np.ndarray) -> list[tuple[int, int, int, int]]:
@@ -733,7 +787,7 @@ class BrowserWorker(threading.Thread):
                     try:
                         subject = subject_box(transformed)
                     except Exception as exc:
-                        self.emit("progress", f"{progress_label}主体识别失败，改用中心裁切（{type(exc).__name__}）")
+                        self.emit("progress", f"{progress_label}主体检测和自动分割失败，改用中心裁切（{type(exc).__name__}）")
                 derivatives = (
                     (("主图_900x1200", _crop_image(transformed, (900, 1200), subject)),
                      ("主图_1200x1200", _crop_image(transformed, (1200, 1200), subject)))

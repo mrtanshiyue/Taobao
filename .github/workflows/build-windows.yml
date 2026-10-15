@@ -38,5 +38,6 @@ jobs:
             dist/淘宝图片助手.exe
             dist/第三方模型许可证.txt
             dist/NanoDet模型许可证.txt
+            dist/U2NetP模型许可证.txt
           if-no-files-found: error
           retention-days: 30

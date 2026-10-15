@@ -3,7 +3,7 @@
 ## 安装与运行
 
 1. 安装 Python 3.10 或更新版本，并在安装时启用 Python Launcher（`py` 命令）。
-2. 双击 `setup.bat` 安装依赖并校验 YuNet 人脸模型和约 3.6 MB 的 NanoDet 主体检测模型；运行时需要 Microsoft Edge。安装未完整结束时，启动脚本会停止并提示，不会继续打开一个缺依赖的程序。
+2. 双击 `setup.bat` 安装依赖并校验 YuNet 人脸模型、NanoDet 目标检测模型和约 4.4 MB 的 U2NetP 通用主体分割模型；运行时需要 Microsoft Edge。安装未完整结束时，启动脚本会停止并提示，不会继续打开一个缺依赖的程序。
 3. 双击 `run.bat` 或 `run_web.bat`，程序会启动本机服务并自动打开新版界面。所有淘宝登录、下载和图片处理仍在本机完成；关闭助手窗口后服务会自动退出，下载处理中会等任务完成后退出。也可以点界面右上角“退出助手”。
 
 服务只监听本机地址，其他设备无法访问。淘宝登录、下载和图片处理都在本机完成。点击右上角“退出助手”会停止服务和程序；浏览器不会自动关闭标签页，页面会提示退出状态，请手动关闭标签页。
@@ -24,7 +24,7 @@
 
 打开商品页、登录检查、扫描或页面诊断发生异常时，错误类型和具体原因会追加到用户目录下 `.taobao_image_helper/运行日志.txt`；图片下载失败仍记录在商品文件夹内的“下载失败记录.txt”。
 
-程序会在单独的 Edge 配置中记住登录状态。镜像是左右翻转。扫描会限定在商品主图画廊和详情内容区；同一张图的多个清晰度版本会优先选尺寸较大的链接。无法识别这些区域时会提示，不会按整页位置猜图片类型。若淘宝改版导致识别失败，“页面诊断”可生成只含页面容器标签、类名、图片数量和尺寸的 JSON。报告不包含 Cookie、商品标题或图片地址。图片类型可以手动修正。主图主体使用 OpenCV Zoo 的 NanoDet COCO 目标检测模型，能优先围绕人物和常见物体裁切；时装、特殊商品或模型漏检时会回退到中心裁切，建议检查裁切结果。人脸识别使用 [OpenCV Zoo YuNet](https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet) 模型；马赛克会扩展到人脸框周边并使用更大的像素块。小脸、侧脸或遮挡的人脸仍可能漏检，建议抽查处理结果。YuNet 的 MIT 许可文本位于 `models/LICENSE`，NanoDet 的 Apache 2.0 许可位于 `models/NANODET_LICENSE`。
+程序会在单独的 Edge 配置中记住登录状态。镜像是左右翻转。扫描会限定在商品主图画廊和详情内容区；同一张图的多个清晰度版本会优先选尺寸较大的链接。无法识别这些区域时会提示，不会按整页位置猜图片类型。若淘宝改版导致识别失败，“页面诊断”可生成只含页面容器标签、类名、图片数量和尺寸的 JSON。报告不包含 Cookie、商品标题或图片地址。图片类型可以手动修正。主图先使用 OpenCV Zoo 的 NanoDet COCO 检测模型，优先识别人和常见商品；未检测到主体时自动调用 U2NetP 显著性分割，围绕最大前景区域裁切，不需要逐张人工确认。两种模型都未能提供主体时才使用中心裁切。U2NetP ONNX 模型约 4.4 MB，使用 OpenCV DNN 离线推理，不增加 Python 运行库。人脸识别使用 [OpenCV Zoo YuNet](https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet) 模型；马赛克会扩展到人脸框周边并使用更大的像素块。小脸、侧脸或遮挡的人脸仍可能漏检。YuNet 的 MIT 许可文本位于 `models/LICENSE`，NanoDet 的 Apache 2.0 许可位于 `models/NANODET_LICENSE`，U2NetP 的 Apache 2.0 许可位于 `models/U2NETP_LICENSE`。
 
 ## 文件
 

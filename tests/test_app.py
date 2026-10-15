@@ -8,6 +8,7 @@ from PIL import Image
 
 from app import (
     _face_detector,
+    _saliency_detector,
     BrowserWorker,
     best_image_url,
     canonical_image_url,
@@ -22,6 +23,8 @@ from app import (
     record_worker_failure,
     request_image,
     require_taobao_login,
+    saliency_subject_box,
+    subject_box,
     valid_product_url,
 )
 from web_app import LocalApp, local_request_allowed
@@ -212,6 +215,52 @@ class ImageHelpersTests(unittest.TestCase):
         detector = _face_detector()
         self.assertIsNotNone(detector)
         self.assertIs(_face_detector(), detector)
+
+    def test_u2netp_model_loads_and_detector_is_reused(self):
+        detector = _saliency_detector()
+        self.assertIsNotNone(detector)
+        self.assertIs(_saliency_detector(), detector)
+        detector.setInput(np.zeros((1, 3, 320, 320), dtype=np.float32))
+        prediction = detector.forward(detector.getUnconnectedOutLayersNames())[0]
+        self.assertEqual(prediction.shape, (1, 1, 320, 320))
+        self.assertTrue(np.isfinite(prediction).all())
+
+    def test_saliency_segmentation_uses_largest_valid_component(self):
+        prediction = np.zeros((1, 1, 320, 320), dtype=np.float32)
+        prediction[0, 0, 80:240, 100:220] = 0.95
+        prediction[0, 0, 15:18, 15:18] = 1.0
+
+        class FakeDetector:
+            def setInput(self, _blob):
+                pass
+
+            def getUnconnectedOutLayersNames(self):
+                return ("saliency",)
+
+            def forward(self, _names):
+                return (prediction,)
+
+        with patch("app._saliency_detector", return_value=FakeDetector()):
+            box = saliency_subject_box(Image.new("RGB", (640, 480), "white"))
+        self.assertIsNotNone(box)
+        x, y, width, height = box
+        self.assertAlmostEqual(x + width / 2, 320, delta=8)
+        self.assertAlmostEqual(y + height / 2, 240, delta=8)
+        self.assertGreater(width, 220)
+        self.assertGreater(height, 220)
+
+    def test_subject_segmentation_runs_only_when_object_detection_misses(self):
+        image = Image.new("RGB", (100, 80), "white")
+        with patch("app._detected_subject_box", return_value=None), patch(
+            "app.saliency_subject_box", return_value=(10, 20, 30, 40)
+        ) as segment:
+            self.assertEqual(subject_box(image), (10, 20, 30, 40))
+            segment.assert_called_once_with(image)
+        with patch("app._detected_subject_box", return_value=(1, 2, 3, 4)), patch(
+            "app.saliency_subject_box"
+        ) as segment:
+            self.assertEqual(subject_box(image), (1, 2, 3, 4))
+            segment.assert_not_called()
 
     def test_face_detection_uses_yunet_and_clips_boxes_to_image(self):
         class FakeDetector:
